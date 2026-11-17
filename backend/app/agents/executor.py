@@ -188,7 +188,7 @@ class Executor:
             return True, ""
         from ..config import HORIZONS
 
-        c = self.predictor.cache.get((sym, "15m"))
+        c = self.predictor.decision_cache(sym)
         if not c:
             return False, "nessuna previsione a 4 ore disponibile"
         if time.time() - c["ts"] > settings.max_forecast_age_s:
@@ -230,6 +230,8 @@ class Executor:
         mmr = self.feed.markets[sym].mmr
         room = self.equity() - sum(n * (d + r + c) for n, r in self._exposures())
         notional = max(0.0, room / (d + mmr + c))
+        if self.risk_share(risk) <= 0:
+            return 0.0, f"rischio {risk * 100:.0f}% oltre l'ultima fascia: nessuna apertura"
         target = self.risk_share(risk) * self.equity()  # 3%-10% of total capital by risk
         margin = min(target, notional / leverage)
         if margin < settings.min_margin_usdc:
@@ -421,7 +423,7 @@ class Executor:
         so small wobbles around 50% do not close a trade early (the stop loss stays active anyway)."""
         if self.predictor is None:
             return None
-        c = self.predictor.cache.get((p.symbol, "15m"))
+        c = self.predictor.decision_cache(p.symbol) if hasattr(self.predictor, "decision_cache") else self.predictor.cache.get((p.symbol, "15m"))
         if not c or c["ts"] <= p.last_pred_ts or c["ts"] < p.opened_ts:
             return None
         p.last_pred_ts = c["ts"]
@@ -526,10 +528,8 @@ class Executor:
         sym = sig["symbol"]
         try:
             if self.predictor is not None:
-                fresh = await asyncio.to_thread(self.predictor._run_tf, sym, "15m")
-                if fresh:
-                    self.predictor.cache[(sym, "15m")] = fresh
-            new = await asyncio.to_thread(self.checker.evaluate, sym)
+                await asyncio.to_thread(self.predictor.run_decision, sym)  # large model when loaded
+            new = await asyncio.to_thread(self.checker.evaluate, sym, True)
             if new and not new["eligible"] and not new["entry_ok"] and new["dip_price"] < sig["dip_price"]:
                 # the fresh forecast sees a further drop: same logic again with the new, lower entry point
                 # (no cooldown: the Checker keeps watching and the next approach triggers a new re-prediction)
@@ -546,7 +546,7 @@ class Executor:
                 return
             self.bus.agent_log(
                 "Executor",
-                f"{sig['base']}: previsione ricalcolata, punto d'ingresso confermato (4 ore {new['conf_4h'] * 100:.0f}%, "
+                f"{sig['base']}: previsione ricalcolata con {new.get('model') or 'Kronos'}, punto d'ingresso confermato (4 ore {new['conf_4h'] * 100:.0f}%, "
                 f"8 ore {new['p_up_8h'] * 100:.0f}% di rialzo)", "info",
             )
             await self.open_from_signal(new)

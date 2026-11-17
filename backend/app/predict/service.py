@@ -30,6 +30,7 @@ class PredictionService:
     def __init__(self, feed: MarketFeed) -> None:
         self.feed = feed
         self.engine = KronosEngine(settings.kronos_model, settings.kronos_tokenizer, settings.kronos_max_context)
+        self.decider = KronosEngine(settings.decision_model, settings.decision_tokenizer, 512) if settings.decision_model else None
         self.cache: dict[tuple[str, str], dict] = {}
         self.focus: set[str] = set()
         self.priority: set[str] = set()  # tokens with open positions
@@ -42,7 +43,8 @@ class PredictionService:
         self.inferences = 0
 
     # ------------------------------------------------------------------ core
-    def _run_tf(self, sym: str, tf: str) -> dict | None:
+    def _run_tf(self, sym: str, tf: str, engine: KronosEngine | None = None) -> dict | None:
+        engine = engine or self.engine
         bars = self.feed.store.get(sym, tf, settings.lookback)
         if len(bars) < MIN_BARS[tf]:
             return None
@@ -54,8 +56,8 @@ class PredictionService:
         last = float(self.feed.store.last_price(sym) or ohlc[-1, 3])
         source = "kronos"
         paths = None
-        if self.engine.ready:
-            paths = self.engine.sample_paths(
+        if engine.ready:
+            paths = engine.sample_paths(
                 [SeriesInput(ohlc, ts, fut)], pred_len, settings.n_samples, settings.temperature, settings.top_p
             )[0]
             if paths is None:
@@ -79,10 +81,27 @@ class PredictionService:
         self.inferences += 1
         return {
             "symbol": sym, "tf": tf, "ts": time.time(), "bar_t": float(bars[-1, 0]), "last": last,
-            "source": source, "latency": self.engine.last_latency_s, "samples": int(paths.shape[0]),
+            "source": source, "latency": engine.last_latency_s, "samples": int(paths.shape[0]),
+            "model": engine.model_name.split("/")[-1],
             "paths": paths, "fan": fan(paths), "future_t": (bars[-1, 0] + sec * np.arange(1, pred_len + 1)).tolist(),
             "trade": trade,
         }
+
+    def run_decision(self, sym: str) -> dict | None:
+        """4h/8h forecast with the large model (falls back to the scanning model while it loads)."""
+        if self.decider is None or not self.decider.ready:
+            return self._run_tf(sym, "15m")
+        res = self._run_tf(sym, "15m", self.decider)
+        if res:
+            self.cache[(sym, "15m:base")] = res
+        return res
+
+    def decision_cache(self, sym: str, max_age: float = 900.0) -> dict | None:
+        """Freshest 4h forecast for decisions: the large model's when recent enough, else the scanner's."""
+        big = self.cache.get((sym, "15m:base"))
+        if big and time.time() - big["ts"] <= max_age:
+            return big
+        return self.cache.get((sym, "15m"))
 
     def _job(self) -> tuple[str, str] | None:
         now = time.time()
@@ -96,8 +115,10 @@ class PredictionService:
                 if stale(sym, tf, MAX_AGE[tf]) and self.feed.store.count(sym, tf) >= MIN_BARS[tf]:
                     return sym, tf
         for sym in list(self.priority):
-            if stale(sym, "15m", 180.0) and self.feed.store.count(sym, "15m") >= MIN_BARS["15m"]:
-                return sym, "15m"  # open positions: keep the 4h forecast fresh for the reversal exit
+            # open positions: keep the 4h forecast fresh for the exits, with the large model when loaded
+            key = "15m:base" if self.decider is not None and self.decider.ready else "15m"
+            if stale(sym, key, 180.0) and self.feed.store.count(sym, "15m") >= MIN_BARS["15m"]:
+                return sym, key
         # alternate the Checker scan (1m) with the scan of the dashboard's horizon timeframe
         board_tfs = sorted({HORIZONS[h][1] for h in self.board_horizons if h in HORIZONS} or {"1m"})
         self._turn += 1
@@ -131,6 +152,8 @@ class PredictionService:
 
     async def run(self) -> None:
         await asyncio.to_thread(self.engine.load)
+        if self.decider is not None:
+            asyncio.create_task(asyncio.to_thread(self.decider.load))  # loads in the background
         while True:
             job = self._job()
             if job is None:
@@ -139,9 +162,13 @@ class PredictionService:
             sym, tf = job
             self.busy_with = f"{sym}:{tf}"
             try:
-                res = await asyncio.to_thread(self._run_tf, sym, tf)
+                if tf == "15m:base":
+                    res = await asyncio.to_thread(self.run_decision, sym)
+                else:
+                    res = await asyncio.to_thread(self._run_tf, sym, tf)
+                    if res:
+                        self.cache[(sym, tf)] = res
                 if res:
-                    self.cache[(sym, tf)] = res
                     self.calib.register(res)
             except Exception:
                 log.exception("prediction failed for %s %s", sym, tf)
@@ -200,6 +227,8 @@ class PredictionService:
     def status(self) -> dict:
         return {
             "model": settings.kronos_model, "ready": self.engine.ready, "error": self.engine.error,
+            "decision_model": settings.decision_model, "decision_ready": bool(self.decider and self.decider.ready),
+            "decision_error": self.decider.error if self.decider else None,
             "device": self.engine.device, "latency": self.engine.last_latency_s, "busy": self.busy_with,
             "inferences": self.inferences, "samples": settings.n_samples, "lookback": settings.lookback,
             "scanned": sum(1 for (s, tf) in self.cache if tf == "1m"),

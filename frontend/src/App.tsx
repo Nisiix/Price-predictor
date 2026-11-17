@@ -154,7 +154,7 @@ export default function App() {
         <div className="status" aria-live="polite">
           <span className="chip"><span className={`dot ${live.connected && feedOk ? "ok" : live.connected ? "warn" : "bad"}`} />Prezzi {live.connected ? (feedOk ? "in tempo reale" : "in ritardo") : "disconnesso"}</span>
           <span className="chip"><span className={`dot ${sys?.kronos.ready ? "ok" : sys?.kronos.error ? "bad" : "warn"}`} />
-            {sys?.kronos.ready ? <>Kronos <b>{sys.kronos.model.split("/")[1]}</b> · {sys.kronos.scanned}/{sys.markets} token</> : sys?.kronos.error ? "Kronos non disponibile, stima statistica" : "Kronos in caricamento"}
+            {sys?.kronos.ready ? <>Kronos <b>{sys.kronos.model.split("/")[1]}</b>{sys.kronos.decision_model ? <> + <b title="Usato per le decisioni dell'Executor: ricalcolo prima dell'ingresso e uscite">{sys.kronos.decision_model.split("/")[1]}</b>{sys.kronos.decision_ready ? "" : " (in caricamento)"}</> : null} · {sys.kronos.scanned}/{sys.markets} token</> : sys?.kronos.error ? "Kronos non disponibile, stima statistica" : "Kronos in caricamento"}
           </span>
           <span className="chip"><span className={`dot ${(sys?.analyst.risk ?? 0) >= 70 ? "bad" : (sys?.analyst.risk ?? 0) >= 55 ? "warn" : "ok"}`} />Rischio macro <b>{(sys?.analyst.risk ?? 0).toFixed(0)}</b></span>
           <span className="chip"><span className={`dot ${live.executor?.mode === "real" ? "warn" : "ok"}`} />{live.executor?.mode === "real" ? <b>Trading reale attivo</b> : "Executor in simulazione"}</span>

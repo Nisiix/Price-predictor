@@ -304,6 +304,9 @@ def test_entry_rejected_when_price_already_above_the_forecast():
     class Pred:
         cache = {}
 
+        def decision_cache(self, sym):
+            return self.cache.get((sym, "15m"))
+
     ex.predictor = Pred()
     n, L = 24, 16
     paths = np.full((n, L, 4), 101.0)  # forecast made at 99.0: 4h median 101
@@ -331,7 +334,7 @@ def test_risk_tiers_share_of_capital():
 
     assert E.risk_share(0.20) == 0.10 and E.risk_share(0.25) == 0.10
     assert E.risk_share(0.28) == 0.07 and E.risk_share(0.33) == 0.05
-    assert E.risk_share(0.40) == 0.03 and E.risk_share(0.55) == settings.risk_tier_above
+    assert E.risk_share(0.40) == 0.03 and E.risk_share(0.55) == 0.0  # above 40%: no opening
     feed, ctl, ex = make()
     p = open_long(ex, lev=10)  # risk 0.2 -> 10% of 1000 = 100 USDC, fits the liquidation rule at 10x
     assert p.margin == pytest.approx(100.0, rel=0.01)

@@ -33,6 +33,10 @@ class Settings:
     # --- Kronos --------------------------------------------------------------
     kronos_model: str = os.getenv("PP_KRONOS_MODEL", "NeoQuasar/Kronos-mini")
     kronos_tokenizer: str = os.getenv("PP_KRONOS_TOKENIZER", "NeoQuasar/Kronos-Tokenizer-2k")
+    # largest open Kronos model, used where accuracy matters more than speed: the 4h forecast of open
+    # positions and the re-prediction right before an entry (Kronos-mini keeps scanning the universe)
+    decision_model: str = os.getenv("PP_DECISION_MODEL", "NeoQuasar/Kronos-base")
+    decision_tokenizer: str = os.getenv("PP_DECISION_TOKENIZER", "NeoQuasar/Kronos-Tokenizer-base")
     kronos_max_context: int = _i("PP_KRONOS_MAX_CONTEXT", 2048)
     lookback: int = _i("PP_LOOKBACK", 128)  # bars fed to the model (CPU budget)
     n_samples: int = _i("PP_SAMPLES", 24)  # sampled futures per prediction
@@ -51,7 +55,7 @@ class Settings:
     # user rule: margin per trade as a share of total capital, by extra risk (risk <= threshold -> share);
     # above the last threshold the smallest share is used. The liquidation sizing can still lower it.
     risk_tiers: tuple[tuple[float, float], ...] = ((0.25, 0.10), (0.30, 0.07), (0.35, 0.05), (0.40, 0.03))
-    risk_tier_above: float = _f("PP_RISK_ABOVE_40", 0.03)
+    risk_tier_above: float = _f("PP_RISK_ABOVE_40", 0.0)  # 0 = do not open (user rule)
     # cross-margin sizing (user rule): every position's liquidation price must stay at least this far from its
     # entry (0.5 = a long liquidates only below half its entry price, a short only above 1.5x)
     liq_min_distance: float = _f("PP_LIQ_DISTANCE", 0.5)
@@ -65,7 +69,7 @@ class Settings:
     # 4-hour strategy (Checker selection + Executor entry/exit)
     min_signal_score: float = _f("PP_MIN_SCORE", 0.0)  # probability x (1 - risk); 0 = off (user: ignore risk for entries)
     min_confidence: float = _f("PP_MIN_CONF", 0.70)  # Kronos 4h probability must be ABOVE this (user rule: > 70%)
-    max_risk: float = _f("PP_MAX_RISK", 1.0)  # extra risk ceiling; 1 = off (risk only sets the leverage)
+    max_risk: float = _f("PP_MAX_RISK", 0.40)  # user rule: no opening above 40% extra risk
     max_forecast_age_s: float = _f("PP_MAX_FORECAST_AGE", 900.0)  # no entries on a 4h forecast older than 15 min
     longs_only: bool = os.getenv("PP_LONGS_ONLY", "1") == "1"  # user rule: the Executor opens long positions only
     drop_priority_pct: float = _f("PP_DROP_PRIORITY", 5.0)  # >5% drop in 4/8/12 h moves a token up the opening queue

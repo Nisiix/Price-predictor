@@ -53,7 +53,7 @@ export type Report = { summary: Group; groups: Record<string, Group[]>; insights
 export type LogEntry = { agent: string; text: string; level: string; ts: number; url?: string };
 export type System = {
   feed: string; last_tick: number; markets: number; uptime: number;
-  kronos: { model: string; ready: boolean; error: string | null; device: string; latency: number; busy: string | null; inferences: number; samples: number; scanned: number };
+  kronos: { model: string; ready: boolean; error: string | null; device: string; latency: number; busy: string | null; inferences: number; samples: number; scanned: number; decision_model?: string; decision_ready?: boolean };
   checker: { paused: boolean; reason: string; ranked: number; signals: number }; analyst: { risk: number; status: string }; executor: { mode: string };
 };
 

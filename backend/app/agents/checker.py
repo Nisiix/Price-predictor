@@ -74,12 +74,12 @@ class Checker:
         lev = 20 if risk < 0.25 else 15 if risk < 0.35 else 12 if risk < 0.45 else 10
         return min(lev, max_lev)
 
-    def evaluate(self, sym: str) -> dict | None:
+    def evaluate(self, sym: str, decision: bool = False) -> dict | None:
         """4-hour plan for one token: direction and probability from Kronos (15m candles, 16 steps),
         extra risk from indicators, historical analogs, volatility and macro, and the entry zone
         (position of the price inside the last 4 hours' range)."""
         m = self.feed.markets.get(sym)
-        c4 = self.predictor.cache.get((sym, "15m"))
+        c4 = self.predictor.decision_cache(sym) if decision else self.predictor.cache.get((sym, "15m"))
         bars15 = self.feed.store.get(sym, "15m")
         bars5 = self.feed.store.get(sym, "5m", 48)  # last 4 hours
         if not m or not c4 or len(bars15) < 64 or len(bars5) < 12:
@@ -136,7 +136,7 @@ class Checker:
         if conf <= settings.min_confidence:
             reasons.append(f"probabilità a 4 ore non oltre il {settings.min_confidence * 100:.0f}%")
         if extra_risk > settings.max_risk:
-            reasons.append("rischio aggiuntivo alto")
+            reasons.append(f"rischio aggiuntivo oltre il {settings.max_risk * 100:.0f}%")
         if score < settings.min_signal_score:
             reasons.append("punteggio sotto soglia")
         zone_bypass = False  # the 4h-range zone is replaced by the predicted entry point
@@ -210,6 +210,7 @@ class Checker:
             "source": c4["source"], "age": time.time() - c4["ts"], "options": c1["trade"]["options"][:4] if best else [],
             "horizons": per_h, "best_h": best_h,
             "drops": drops, "drop_priority": drop_priority, "drop_window": worst[0] if drop_priority else None,
+            "model": c4.get("model", ""),
         }
 
     async def run(self) -> None:
