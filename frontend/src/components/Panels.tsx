@@ -69,6 +69,7 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
                 <span className="name">
                   {m.base}
                   {r?.eligible && <span className="go" title={`Segnale valido per l'Executor: ${r.side} ${r.leverage}x`} />}
+                  {r && r.drop_priority > 0 && <span className="droptag" title="Calo recente oltre il 5%: precedenza in apertura (non cambia la decisione)">↓{(r.drop_priority * 100).toFixed(1)}% {r.drop_window}</span>}
                 </span>
                 <span className={`prob ${b ? (b.dir === "up" ? "long" : "short") : "faint"}`}>
                   {b ? <>{b.dir === "up" ? "▲" : "▼"} {pct(b.conf)}</> : "–"}
@@ -194,7 +195,7 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
             <tbody>
               {ranking.map((r) => (
                 <tr key={r.symbol} className={`clickable ${focus === r.symbol ? "cur" : ""}`} onClick={() => onFocus(r.symbol)}>
-                  <td><b>{r.base}</b></td>
+                  <td><b>{r.base}</b>{r.drop_priority > 0 && <span className="droptag" title="Calo recente oltre il 5%: precedenza in apertura">↓{(r.drop_priority * 100).toFixed(1)}% {r.drop_window}</span>}</td>
                   <td className={r.side}>{r.side === "long" ? "▲ rialzo" : "▼ ribasso"} {pct(r.conf_4h)}</td>
                   <td>{r.leverage}x</td>
                   {withPattern && <td className="n">{r.analog_win != null ? pct(r.analog_win) : "–"}</td>}
@@ -209,7 +210,7 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
         </div>
       )}
       <p className="note" style={{ marginTop: 8 }}>
-        L'Executor apre solo quando la probabilità a 4 ore supera il 70% (il rischio decide la leva) e il prezzo è nella fascia evidenziata:
+        L'Executor apre solo long, quando la probabilità di rialzo a 4 ore supera il 70% (il rischio decide la leva) e il prezzo è nella fascia evidenziata; i token con un calo oltre il 5% in 4, 8 o 12 ore hanno la precedenza:
         vicino al minimo delle ultime 4 ore per un long, vicino al massimo per uno short. Seleziona una riga per l'analisi completa.
       </p>
     </div>
@@ -318,7 +319,7 @@ export function Positions({ ex, onToast, realClose }: { ex: ExecutorView | null;
         <div><span>Posizioni</span><b>{ex.max_positions ? `${ex.positions.length} / ${ex.max_positions}` : ex.positions.length}</b></div>
         <div><span>Per operazione</span><b>fino a {ex.margin_usdc} USDC</b></div>
         <div title="L'importo di ogni apertura è calcolato perché la liquidazione di tutte le posizioni resti almeno a questa distanza dall'entrata"><span>Limite long</span><b>liquidazione a ≥{Math.round(ex.liq_min_distance * 100)}% dall'entrata</b></div>
-        <div><span>Chiusura</span><b style={{ fontSize: 14 }}>{ex.use_tp ? `TP +${ex.tp_pct}% · ` : "inversione 4 ore · "}{ex.use_initial_stop ? `SL −${ex.sl_pct}%` : `niente stop in perdita, dopo ${ex.recovery_hours} h esce se il recupero è sotto il ${Math.round(ex.recovery_min_prob * 100)}%`} · da +{ex.lock_trigger_pct}% protegge +{ex.lock_profit_pct}% (con leva)</b></div>
+        <div><span>Chiusura</span><b style={{ fontSize: 14 }}>{ex.use_tp ? `TP +${ex.tp_pct}% · ` : "inversione 4 ore · "}{ex.use_initial_stop ? `SL −${ex.sl_pct}%` : ex.hold_losers ? "le posizioni in perdita non vengono mai chiuse" : `niente stop in perdita, dopo ${ex.recovery_hours} h esce se il recupero è sotto il ${Math.round(ex.recovery_min_prob * 100)}%`} · da +{ex.lock_trigger_pct}% protegge +{ex.lock_profit_pct}% (con leva)</b></div>
         <label className="switch" style={{ marginLeft: "auto" }}>
           <input type="checkbox" checked={ex.auto} onChange={toggleAuto} /> Apertura automatica
         </label>

@@ -329,8 +329,14 @@ class Executor:
         self.bus.agent_log("Executor", f"Chiusa {p.base} ({reason}): PnL {p.pnl:+.2f} USDC ({p.roe:+.1f}%) → inviato al Controller", lvl)
 
     async def close_all(self, reason: str) -> None:
+        kept = []
         for p in list(self.open_positions()):
+            if settings.hold_losers and p.pnl < 0:
+                kept.append(p.base)  # user rule: losing positions stay open
+                continue
             await self.close(p.id, reason)
+        if kept:
+            self.bus.agent_log("Executor", f"Posizioni in perdita mantenute aperte nonostante l'Analyst: {', '.join(kept)}", "warn")
 
     # ------------------------------------------------------------- monitoring
     def _check(self, p: Position, price: float, dt: float) -> str | None:
@@ -351,7 +357,10 @@ class Executor:
             self._lock_profit(p)
         if p.tp > 0 and ((p.side > 0 and price >= p.tp) or (p.side < 0 and price <= p.tp)):
             return f"take profit +{settings.take_profit_pct:.0f}% (leva)"
-        return self._reversal(p)
+        reason = self._reversal(p)
+        if reason and settings.hold_losers and p.pnl < 0:
+            return None  # user rule: a losing position is never closed by the agents (only liquidation)
+        return reason
 
     def _lock_profit(self, p: Position) -> None:
         """After +5% leveraged, move the stop to +2% leveraged profit (never below the current stop)."""
@@ -388,7 +397,7 @@ class Executor:
         if p.reverse_count >= settings.exit_confirmations:
             opp = 1 - p.p_dir_now
             return f"inversione della previsione 4h ({'ribasso' if p.side > 0 else 'rialzo'} al {opp * 100:.0f}%)"
-        return self._recovery(p, c)
+        return None if settings.hold_losers else self._recovery(p, c)
 
     def _recovery(self, p: Position, c: dict) -> str | None:
         """No stop in loss: after `recovery_hours`, a losing position is closed only if the 4h projection
@@ -581,6 +590,7 @@ class Executor:
             "exit_confirmations": settings.exit_confirmations, "entry_zone": settings.entry_zone,
             "lock_trigger_pct": settings.lock_trigger_pct, "lock_profit_pct": settings.lock_profit_pct,
             "liq_min_distance": settings.liq_min_distance, "equity_now": self.equity(), "paper": self.paper_view(),
+            "hold_losers": settings.hold_losers, "longs_only": settings.longs_only,
             "use_initial_stop": settings.use_initial_stop, "recovery_hours": settings.recovery_hours,
             "recovery_min_prob": settings.recovery_min_prob,
         }

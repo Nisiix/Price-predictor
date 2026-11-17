@@ -129,7 +129,18 @@ class Checker:
             reasons.append("punteggio sotto soglia")
         if not in_zone:
             reasons.append("in attesa: prezzo lontano dal " + ("minimo" if side > 0 else "massimo") + " delle 4 ore")
+        if settings.longs_only and side < 0:
+            reasons.insert(0, "previsione al ribasso: l'Executor apre solo long")
         eligible = not reasons
+
+        # recent sharp drops (> drop_priority_pct over 4/8/12 h): only an ordering priority among eligible tokens
+        closes15 = bars15[:, 4]
+        drops = {}
+        for label, n in (("4h", 16), ("8h", 32), ("12h", 48)):
+            if len(closes15) > n and closes15[-n - 1] > 0:
+                drops[label] = float(price / closes15[-n - 1] - 1)
+        worst = min(drops.items(), key=lambda kv: kv[1]) if drops else None
+        drop_priority = -worst[1] if worst and worst[1] <= -settings.drop_priority_pct / 100 else 0.0
 
         # same risk model on every dashboard horizon: which one has the best probability with the lowest risk
         per_h = []
@@ -173,6 +184,7 @@ class Checker:
             "eligible": eligible and not self.paused, "reasons": reasons,
             "source": c4["source"], "age": time.time() - c4["ts"], "options": c1["trade"]["options"][:4] if best else [],
             "horizons": per_h, "best_h": best_h,
+            "drops": drops, "drop_priority": drop_priority, "drop_window": worst[0] if drop_priority else None,
         }
 
     async def run(self) -> None:
@@ -198,10 +210,14 @@ class Checker:
         return {k: r[k] for k in ("symbol", "base", "name", "rank", "price", "change_24h", "side", "leverage",
                                   "kronos_p_tp", "kronos_p_sl", "kronos_p_liq", "ev", "combined_prob",
                                   "extra_risk", "score", "eligible", "reasons", "source", "max_leverage",
-                                  "p_up_4h", "conf_4h", "range_pos", "in_zone", "horizons", "best_h")} | {
+                                  "p_up_4h", "conf_4h", "range_pos", "in_zone", "horizons", "best_h",
+                                  "drops", "drop_priority", "drop_window")} | {
             "rsi": ind["rsi"], "regime": ind["regime"], "flags": ind["flags"], "ind_score": ind["score"],
             "analog_win": r["analog_dir"], "analog_n": r["analogs"].get("n", 0),
         }
 
     def signals(self) -> list[dict]:
-        return [r for r in self.ranking if r["eligible"]]
+        """Eligible tokens in opening order: those after a sharp recent drop first (largest drop first),
+        then by score. The drop never makes a token eligible, it only moves it up the queue."""
+        sig = [r for r in self.ranking if r["eligible"]]
+        return sorted(sig, key=lambda r: (r.get("drop_priority", 0) > 0, r.get("drop_priority", 0), r["score"]), reverse=True)

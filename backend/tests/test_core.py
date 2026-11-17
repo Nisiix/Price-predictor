@@ -152,7 +152,8 @@ def test_liquidation_is_cross_margin_and_far():
     assert ctl.trades[-1].pnl < -p.margin  # cross margin: the account absorbs the loss
 
 
-def test_analyst_close_all_and_balance_accounting():
+def test_analyst_close_all_and_balance_accounting(monkeypatch):
+    monkeypatch.setattr(settings, "hold_losers", False)  # flat trade is slightly negative after fees
     feed, ctl, ex = make()
     start = ex.balance
     p = open_long(ex)
@@ -233,7 +234,8 @@ def test_profit_lock_moves_stop_to_plus_2_after_plus_5():
     assert ctl.trades[-1].lev_move > 0  # closed in profit (gross)
 
 
-def test_no_loss_stop_by_default_recovery_check_after_hours():
+def test_no_loss_stop_by_default_recovery_check_after_hours(monkeypatch):
+    monkeypatch.setattr(settings, "hold_losers", False)
     feed, ctl, ex = make()
     p = open_long(ex)
     assert p.sl == 0.0
@@ -269,3 +271,28 @@ def test_sizing_keeps_every_liquidation_half_the_entry_away():
     for q in ps:
         q.liq = ex.cross_liq(q)
     assert p1.liq <= p1.entry * 0.5 * 1.05  # the long stays far from liquidation (within the short's extra load)
+
+
+def test_signals_prioritise_recent_drops_without_changing_eligibility():
+    from app.agents.checker import Checker
+
+    ch = Checker.__new__(Checker)
+    ch.ranking = [
+        {"symbol": "A", "eligible": True, "score": 0.6, "drop_priority": 0.0},
+        {"symbol": "B", "eligible": True, "score": 0.4, "drop_priority": 0.08},
+        {"symbol": "C", "eligible": False, "score": 0.9, "drop_priority": 0.20},  # big drop but not eligible
+        {"symbol": "D", "eligible": True, "score": 0.5, "drop_priority": 0.06},
+    ]
+    assert [r["symbol"] for r in ch.signals()] == ["B", "D", "A"]
+
+
+def test_losing_positions_are_never_closed_by_agents():
+    feed, ctl, ex = make()
+    p = open_long(ex)
+    feed.set(p.entry * 0.99)
+    ex._mark(p, p.entry * 0.99)
+    asyncio.run(ex.close_all("Analyst: test"))
+    assert p.status == "open"  # Analyst cannot close a loser
+    ex._reversal = lambda q: "inversione della previsione 4h"
+    assert ex._check(p, p.entry * 0.99, 0.5) is None  # reversal ignored while at a loss
+    assert ex._check(p, p.entry * 1.003, 0.5).startswith("inversione")  # in profit: closes

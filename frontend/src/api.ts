@@ -24,6 +24,7 @@ export type CheckerRow = {
   rsi: number; regime: string; flags: string[]; ind_score: number; analog_win: number | null; analog_n: number;
   p_up_4h: number; conf_4h: number; range_pos: number; in_zone: boolean;
   horizons: HorizonPick[]; best_h: HorizonPick | null;
+  drops: Record<string, number>; drop_priority: number; drop_window: string | null;
 };
 export type Position = {
   id: string; symbol: string; base: string; side: "long" | "short"; leverage: number; margin: number; entry: number;
@@ -40,7 +41,7 @@ export type ExecutorView = {
   equity: number; positions: Position[]; pending: any[]; intents: Intent[]; max_positions: number; margin_usdc: number;
   tp_pct: number; sl_pct: number; use_tp: boolean; exit_margin: number; exit_confirmations: number; entry_zone: number;
   lock_trigger_pct: number; lock_profit_pct: number;
-  use_initial_stop: boolean; recovery_hours: number; recovery_min_prob: number; liq_min_distance: number; equity_now: number;
+  use_initial_stop: boolean; recovery_hours: number; recovery_min_prob: number; liq_min_distance: number; equity_now: number; hold_losers: boolean; longs_only: boolean;
   paper: PaperCapital;
 };
 export type Intent = { id: string; ts: number; action: "open" | "close" | "update_sl"; symbol: string; base?: string; side: "long" | "short"; leverage?: number; margin?: number; qty: number; price?: number; tp?: number | null; sl?: number | null; base_tick?: number; quote_tick?: number; position_id?: string; reason?: string };

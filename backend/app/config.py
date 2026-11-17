@@ -62,12 +62,15 @@ class Settings:
     min_signal_score: float = _f("PP_MIN_SCORE", 0.0)  # probability x (1 - risk); 0 = off (user: ignore risk for entries)
     min_confidence: float = _f("PP_MIN_CONF", 0.70)  # Kronos 4h probability must be ABOVE this (user rule: > 70%)
     max_risk: float = _f("PP_MAX_RISK", 1.0)  # extra risk ceiling; 1 = off (risk only sets the leverage)
+    longs_only: bool = os.getenv("PP_LONGS_ONLY", "1") == "1"  # user rule: the Executor opens long positions only
+    drop_priority_pct: float = _f("PP_DROP_PRIORITY", 5.0)  # >5% drop in 4/8/12 h moves a token up the opening queue
     entry_zone: float = _f("PP_ENTRY_ZONE", 0.20)  # long in the lowest 20% of the 4h range, short in the highest 20%
     exit_margin: float = _f("PP_EXIT_MARGIN", 0.10)  # reversal only if the opposite direction reaches 50% + margin
     exit_confirmations: int = _i("PP_EXIT_CONFIRM", 2)  # consecutive 4h forecasts confirming the reversal
     use_take_profit: bool = os.getenv("PP_USE_TP", "0") == "1"  # fixed +5% take profit (off: exit on reversal)
     # no stop in loss (user rule): after `recovery_hours` a losing position is closed only if the
     # Kronos 4h projection gives less than `recovery_min_prob` of getting back to break-even
+    hold_losers: bool = os.getenv("PP_HOLD_LOSERS", "1") == "1"  # user rule: never close a position at a loss
     use_initial_stop: bool = os.getenv("PP_USE_SL", "0") == "1"  # 1 restores the fixed -2% leveraged stop
     recovery_hours: float = _f("PP_RECOVERY_HOURS", 2.0)
     recovery_min_prob: float = _f("PP_RECOVERY_MIN_PROB", 0.5)
