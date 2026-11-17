@@ -102,11 +102,12 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
   if (fan && last && futN) {
     const xs = [nowX, ...fan.q50.map((_, i) => x(shown.length + i))];
     const band = (a: number[], b: number[]) => {
-      const top = [last[4], ...b].map((v, i) => `${xs[i]},${y(v)}`);
-      const bot = [last[4], ...a].map((v, i) => `${xs[i]},${y(v)}`).reverse();
+      // start the cone at the price Kronos forecast from (it may differ from the live candle if the forecast is older)
+      const top = [fan.anchor, ...b].map((v, i) => `${xs[i]},${y(v)}`);
+      const bot = [fan.anchor, ...a].map((v, i) => `${xs[i]},${y(v)}`).reverse();
       return [...top, ...bot].join(" ");
     };
-    const med = [last[4], ...fan.q50].map((v, i) => `${xs[i]},${y(v)}`).join(" ");
+    const med = [fan.anchor, ...fan.q50].map((v, i) => `${xs[i]},${y(v)}`).join(" ");
     cone = (
       <g>
         <polygon points={band(fan.q10, fan.q90)} fill="var(--kronos)" opacity={0.13} />

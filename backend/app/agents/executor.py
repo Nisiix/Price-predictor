@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+
+import numpy as np
 import logging
 import time
 from dataclasses import asdict, dataclass, field
@@ -178,6 +180,28 @@ class Executor:
             out.append((p.qty * (p.last_price or p.entry), m.mmr if m else 0.05))
         return out
 
+    def forecast_still_valid(self, sym: str, side: int, price: float) -> tuple[bool, str]:
+        """Right before entering: the latest 4h forecast must still point our way from the CURRENT price
+        (probability above the threshold and median above the live price plus costs, mirrored for shorts)."""
+        if self.predictor is None:
+            return True, ""
+        from ..config import HORIZONS
+
+        c = self.predictor.cache.get((sym, "15m"))
+        if not c:
+            return False, "nessuna previsione a 4 ore disponibile"
+        if time.time() - c["ts"] > settings.max_forecast_age_s:
+            return False, "previsione a 4 ore troppo vecchia"
+        closes = c["paths"][:, HORIZONS["4h"][2] - 1, 3]
+        p_dir = float((closes > price).mean()) if side > 0 else float((closes < price).mean())
+        median = float(np.median(closes))
+        costs = 2 * (settings.taker_fee + settings.slippage)
+        if p_dir <= settings.min_confidence:
+            return False, f"dal prezzo attuale {price:.6g} la probabilità a 4 ore è scesa al {p_dir * 100:.0f}%"
+        if (side > 0 and median <= price * (1 + costs)) or (side < 0 and median >= price * (1 - costs)):
+            return False, f"il prezzo attuale {price:.6g} ha già raggiunto la mediana prevista {median:.6g}"
+        return True, ""
+
     def size_margin(self, sym: str, leverage: float, side: int = 1) -> tuple[float, str]:
         """Largest margin (<= margin_usdc) such that, even if every open position and the new one moved
         `liq_min_distance` against us at the same time, the account would still be above maintenance:
@@ -250,6 +274,11 @@ class Executor:
         snapshot["rsi"] = sig["indicators"]["rsi"]
         snapshot["analog_win"] = sig.get("analog_dir")
         snapshot["macro_risk"] = self.checker.macro_risk
+        ok, why = self.forecast_still_valid(sym, side, price)
+        if not ok:
+            self.cooldown[sym] = time.time() + 120
+            self.bus.agent_log("Executor", f"{sig['base']}: apertura annullata, {why}", "warn")
+            return
         margin, why = self.size_margin(sym, sig["leverage"], side)
         if not margin:
             self.cooldown[sym] = time.time() + 600

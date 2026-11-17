@@ -160,7 +160,7 @@ class PredictionService:
                 out[label] = None
                 continue
             # paths were anchored on the price at inference time; express as returns vs that price
-            st = horizon_stats(c["paths"], c["last"], step)
+            st = horizon_stats(c["paths"], last, step)  # vs the live price, not the price at inference time
             st.update({
                 "tf": tf, "step": step, "seconds": secs, "source": c["source"], "age": time.time() - c["ts"],
                 "experimental": label in EXPERIMENTAL_HORIZONS, "accuracy": self.calib.summary().get(label),
@@ -178,10 +178,11 @@ class PredictionService:
             if not c:
                 continue
             closes = c["paths"][:, step - 1, 3]
-            p_up = float((closes > c["last"]).mean())
+            live = self.feed.store.last_price(sym) or c["last"]
+            p_up = float((closes > live).mean())
             rows[sym] = {
                 "p_up": p_up, "dir": "up" if p_up >= 0.5 else "down", "conf": max(p_up, 1 - p_up),
-                "exp_ret": float((closes / c["last"] - 1).mean()), "age": now - c["ts"], "source": c["source"],
+                "exp_ret": float((closes / live - 1).mean()), "age": now - c["ts"], "source": c["source"],
             }
         return {"h": label, "tf": tf, "rows": rows}
 

@@ -85,10 +85,15 @@ class Checker:
             return None
         step = HORIZONS["4h"][2]
         closes = c4["paths"][:, step - 1, 3]
-        p_up = float((closes > c4["last"]).mean())
+        # Probabilities are measured against the LIVE price, not the price at the time Kronos ran:
+        # if the market already moved toward the forecast, the remaining upside is what matters.
+        price = self.feed.store.last_price(sym) or c4["last"]
+        p_up = float((closes > price).mean())
         side = 1 if p_up >= 0.5 else -1
         conf = max(p_up, 1 - p_up)
-        exp_ret = float((closes / c4["last"] - 1).mean())
+        exp_ret = float((closes / price - 1).mean())
+        median_4h = float(np.median(closes))
+        drift = price / c4["last"] - 1  # how far the price moved since the forecast was computed
         ind = indicator_view(bars15)
 
         cached = self._analog_cache.get((sym, "4h"))
@@ -99,7 +104,6 @@ class Checker:
             self._analog_cache[(sym, "4h")] = (time.time(), ana)
         analog_dir = (ana["fwd_up"] if side > 0 else 1 - ana["fwd_up"]) if ana.get("n") else None
 
-        price = self.feed.store.last_price(sym) or c4["last"]
         hi4, lo4 = float(bars5[:, 2].max()), float(bars5[:, 3].min())
         range_pos = float((price - lo4) / (hi4 - lo4)) if hi4 > lo4 else 0.5
         in_zone = range_pos <= settings.entry_zone if side > 0 else range_pos >= 1 - settings.entry_zone
@@ -129,6 +133,13 @@ class Checker:
             reasons.append("punteggio sotto soglia")
         if not in_zone:
             reasons.append("in attesa: prezzo lontano dal " + ("minimo" if side > 0 else "massimo") + " delle 4 ore")
+        costs = 2 * (settings.taker_fee + settings.slippage)
+        if side > 0 and median_4h <= price * (1 + costs):
+            reasons.append("prezzo attuale già sopra la mediana prevista a 4 ore")
+        if side < 0 and median_4h >= price * (1 - costs):
+            reasons.append("prezzo attuale già sotto la mediana prevista a 4 ore")
+        if time.time() - c4["ts"] > settings.max_forecast_age_s:
+            reasons.append("previsione a 4 ore troppo vecchia")
         if settings.longs_only and side < 0:
             reasons.insert(0, "previsione al ribasso: l'Executor apre solo long")
         eligible = not reasons
@@ -150,7 +161,7 @@ class Checker:
             if not ch:
                 continue
             cl = ch["paths"][:, st - 1, 3]
-            pu = float((cl > ch["last"]).mean())
+            pu = float((cl > price).mean())
             sd = 1 if pu >= 0.5 else -1
             cf = max(pu, 1 - pu)
             pat = (ana["fwd_up"] if sd > 0 else 1 - ana["fwd_up"]) if ana.get("n") else None
@@ -173,7 +184,8 @@ class Checker:
             "symbol": sym, "base": m.base, "name": m.name, "rank": m.rank, "price": price,
             "change_24h": m.change_24h, "max_leverage": m.max_leverage,
             "side": "long" if side > 0 else "short", "leverage": lev,
-            "p_up_4h": p_up, "conf_4h": conf, "exp_ret_4h": exp_ret,
+            "p_up_4h": p_up, "conf_4h": conf, "exp_ret_4h": exp_ret, "median_4h": median_4h,
+            "forecast_price": c4["last"], "drift": drift,
             "range_pos": range_pos, "range_hi": hi4, "range_lo": lo4, "in_zone": in_zone,
             "kronos_p_tp": conf,  # probability used by the Controller buckets
             "kronos_p_sl": 1 - conf, "kronos_p_liq": best["p_liq"] if best else 0.0,

@@ -296,3 +296,21 @@ def test_losing_positions_are_never_closed_by_agents():
     ex._reversal = lambda q: "inversione della previsione 4h"
     assert ex._check(p, p.entry * 0.99, 0.5) is None  # reversal ignored while at a loss
     assert ex._check(p, p.entry * 1.003, 0.5).startswith("inversione")  # in profit: closes
+
+
+def test_entry_rejected_when_price_already_above_the_forecast():
+    feed, ctl, ex = make(price=100.0)
+
+    class Pred:
+        cache = {}
+
+    ex.predictor = Pred()
+    n, L = 24, 16
+    paths = np.full((n, L, 4), 101.0)  # forecast made at 99.0: 4h median 101
+    Pred.cache[("PERP_SOL_USDC", "15m")] = {"ts": time.time(), "last": 99.0, "paths": paths}
+    ok, why = ex.forecast_still_valid("PERP_SOL_USDC", 1, 100.0)
+    assert ok  # 101 > 100 + costs, all samples above
+    ok, why = ex.forecast_still_valid("PERP_SOL_USDC", 1, 101.5)  # price already above the forecast
+    assert not ok and "probabilit" in why or "mediana" in why
+    Pred.cache[("PERP_SOL_USDC", "15m")]["ts"] = time.time() - 3600
+    assert not ex.forecast_still_valid("PERP_SOL_USDC", 1, 100.0)[0]  # stale forecast

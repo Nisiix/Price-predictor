@@ -62,6 +62,7 @@ class Settings:
     min_signal_score: float = _f("PP_MIN_SCORE", 0.0)  # probability x (1 - risk); 0 = off (user: ignore risk for entries)
     min_confidence: float = _f("PP_MIN_CONF", 0.70)  # Kronos 4h probability must be ABOVE this (user rule: > 70%)
     max_risk: float = _f("PP_MAX_RISK", 1.0)  # extra risk ceiling; 1 = off (risk only sets the leverage)
+    max_forecast_age_s: float = _f("PP_MAX_FORECAST_AGE", 900.0)  # no entries on a 4h forecast older than 15 min
     longs_only: bool = os.getenv("PP_LONGS_ONLY", "1") == "1"  # user rule: the Executor opens long positions only
     drop_priority_pct: float = _f("PP_DROP_PRIORITY", 5.0)  # >5% drop in 4/8/12 h moves a token up the opening queue
     entry_zone: float = _f("PP_ENTRY_ZONE", 0.20)  # long in the lowest 20% of the 4h range, short in the highest 20%
