@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api, pct, price, signed, useLive } from "./api";
 import type { Snapshot } from "./api";
 import { Chart, fmtDur } from "./components/Chart";
-import { ActivityLog, AnalystPanel, CheckerTable, ControllerPanel, HORIZON_CHOICES, HorizonLadder, Positions, Verdict, Watchlist, horizonName } from "./components/Panels";
+import { AgentsPage } from "./components/AgentsPage";
+import { HORIZON_CHOICES, HorizonLadder, Watchlist, horizonName } from "./components/Panels";
 import { Ticket, WalletPanel } from "./components/Ticket";
 import { useRealTrading } from "./wallet/useRealTrading";
 
@@ -237,18 +238,7 @@ export default function App() {
           </aside>
         </main>
       ) : (
-        <main className="agents">
-          <section className="agents-checker">
-            <CheckerTable ranking={live.ranking} focus={focus} onFocus={setFocus} paused={live.paused} pauseReason={live.pauseReason} />
-            <Verdict snap={snap} />
-          </section>
-          <section className="agents-exec">
-            <Positions ex={live.executor} onToast={setToast} realClose={realClose} />
-            <ActivityLog log={live.log} />
-          </section>
-          <AnalystPanel a={live.analyst} />
-          <ControllerPanel r={live.report} />
-        </main>
+        <AgentsPage live={live} focus={focus} onFocus={setFocus} snap={snap} onToast={setToast} realClose={realClose} />
       )}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import type { AnalystView, Board, CheckerRow, ExecutorView, HorizonStat, LogEntry, Market, Position, Report, Snapshot } from "../api";
-import { ago, pct, postJSON, price, signed, usd } from "../api";
+import type { Board, CheckerRow, ExecutorView, HorizonStat, Market, Position, Snapshot } from "../api";
+import { pct, postJSON, price, signed, usd } from "../api";
 
 const HORIZON_ORDER = ["15m", "30m", "1h", "4h"];
 export const HORIZON_CHOICES: [string, string][] = [["15m", "15 minuti"], ["30m", "30 minuti"], ["1h", "1 ora"], ["4h", "4 ore"]];
@@ -151,6 +151,8 @@ function RangeBar({ pos, side }: { pos: number; side: "long" | "short" }) {
 export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
   ranking: CheckerRow[]; focus: string | null; onFocus: (s: string) => void; paused: boolean; pauseReason: string;
 }) {
+  // the Pattern column only earns its space once some token has historical analogs
+  const withPattern = ranking.some((r) => r.analog_win != null);
   return (
     <div className="panel">
       <h2>Checker <small>{ranking.length ? `${ranking.length} token, piano a 4 ore ordinato per probabilità × (1 − rischio)` : "in attesa delle previsioni a 4 ore"}</small></h2>
@@ -159,7 +161,7 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
         <div className="scroll" style={{ maxHeight: 380, overflowY: "auto" }}>
           <table className="t">
             <thead>
-              <tr><th>Token</th><th>Kronos 4 ore</th><th>Leva</th><th className="n">Pattern</th><th className="n">Rischio</th><th className="n">Punteggio</th><th>Range 4 ore</th><th>Esito</th></tr>
+              <tr><th>Token</th><th>Kronos 4 ore</th><th>Leva</th>{withPattern && <th className="n">Pattern</th>}<th className="n">Rischio</th><th className="n">Punteggio</th><th>Range 4 ore</th><th>Esito</th></tr>
             </thead>
             <tbody>
               {ranking.map((r) => (
@@ -167,7 +169,7 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
                   <td><b>{r.base}</b></td>
                   <td className={r.side}>{r.side === "long" ? "▲ rialzo" : "▼ ribasso"} {pct(r.conf_4h)}</td>
                   <td>{r.leverage}x</td>
-                  <td className="n">{r.analog_win != null ? pct(r.analog_win) : "–"}</td>
+                  {withPattern && <td className="n">{r.analog_win != null ? pct(r.analog_win) : "–"}</td>}
                   <td className="n" style={{ color: riskColor(r.extra_risk) }}>{pct(r.extra_risk)}</td>
                   <td className="n">{r.score.toFixed(2)}</td>
                   <td><RangeBar pos={r.range_pos} side={r.side} /></td>
@@ -347,113 +349,6 @@ export function Positions({ ex, onToast, realClose }: { ex: ExecutorView | null;
           </tbody></table>
         </>
       )}
-    </div>
-  );
-}
-
-// ------------------------------------------------------------------ analyst
-export function AnalystPanel({ a }: { a: AnalystView | null }) {
-  if (!a) return <div className="panel"><h2>Analyst</h2><p className="empty">Raccolta notizie in corso…</p></div>;
-  const comp = a.components;
-  return (
-    <div className="panel">
-      <h2>Analyst <small>{a.status}</small></h2>
-      <div className="gauge">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <span className="big">{a.risk.toFixed(0)}<span className="muted" style={{ fontSize: 14 }}> / 100</span></span>
-          <span className="muted" style={{ fontSize: 12.5 }}>
-            {a.fear_greed ? `Fear & Greed ${a.fear_greed.value} (${a.fear_greed.label})` : ""}
-          </span>
-        </div>
-        <div className="scale">
-          <div className="needle" style={{ left: `${a.risk}%` }} />
-          <span className="th" style={{ left: `${a.pause_threshold}%` }}>pausa</span>
-          <span className="th" style={{ left: `${a.close_threshold}%` }}>chiude tutto</span>
-        </div>
-        <div className="note" style={{ marginTop: 14 }}>
-          Notizie {comp.notizie?.toFixed(0) ?? 0} · shock di mercato {comp.shock_mercato?.toFixed(0) ?? 0} · sentiment {comp.sentiment?.toFixed(0) ?? 0}
-          {comp.btc_5m != null && ` · BTC/ETH/SOL 5 min ${signed(comp.btc_5m, 2)}%`}
-        </div>
-      </div>
-      <ul className="news">
-        {a.headlines.length === 0 && <li className="empty">Nessuna notizia nelle ultime 12 ore.</li>}
-        {a.headlines.map((h) => (
-          <li key={h.id}>
-            <span className="sev" style={{ background: h.severity >= 0.18 ? "var(--danger)" : h.severity >= 0.08 ? "var(--warn)" : h.severity > 0 ? "var(--muted)" : "var(--line)" }} />
-            <a href={h.url} target="_blank" rel="noreferrer">{h.title}</a>
-            <div className="meta">
-              <span>{h.source}</span><span>{ago(h.ts)}</span>
-              {h.categories.length > 0 && <span>{h.categories.map(catLabel).join(", ")}{h.calming ? " (distensiva)" : ""}</span>}
-              {h.analog && h.severity > 0 && <span>precedente: {h.analog.title} ({h.analog.date.slice(0, 4)}, BTC {signed(h.analog.btc_move * 100, 0)}%)</span>}
-            </div>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-const CATS: Record<string, string> = {
-  war: "guerra", macro_crash: "crollo macro", banking_crisis: "crisi bancaria", fed_hawkish: "Fed restrittiva", trade_war: "dazi/sanzioni",
-  regulation_ban: "divieti", regulation_enforcement: "azioni legali", exchange_collapse: "crisi exchange", hack: "hack",
-  stablecoin_depeg: "depeg stablecoin", lender_insolvency: "insolvenza", etf: "ETF",
-};
-const catLabel = (c: string) => CATS[c] ?? c;
-
-// ------------------------------------------------------------------ controller
-export function ControllerPanel({ r }: { r: Report | null }) {
-  const [tab, setTab] = useState("per_token");
-  if (!r) return <div className="panel"><h2>Controller</h2><p className="empty">Il report compare dopo la prima operazione chiusa.</p></div>;
-  const s = r.summary;
-  const tabs: [string, string][] = [["per_token", "Token"], ["per_pattern", "Pattern"], ["per_prob_kronos", "Prob. Kronos"], ["per_rischio", "Rischio"], ["per_motivo_chiusura", "Chiusure"], ["per_leva", "Leva"]];
-  const g = r.groups[tab] ?? [];
-  return (
-    <div className="panel">
-      <h2>Controller <small><a href="/api/report.md" download="report-controller.md">Scarica il report</a></small></h2>
-      <div className="stats">
-        <div><span>Operazioni</span><b>{s.n}</b></div>
-        <div><span>Win rate</span><b>{pct(s.win_rate)}</b></div>
-        <div><span>PnL</span><b className={s.pnl >= 0 ? "long" : "short"}>{signed(s.pnl)}</b></div>
-        <div><span>ROE medio</span><b>{signed(s.avg_roe, 1)}%</b></div>
-      </div>
-      {r.insights.length > 0 && <ul className="insights">{r.insights.map((i) => <li key={i}>{i}</li>)}</ul>}
-      <div className="tabs">{tabs.map(([k, l]) => <button key={k} aria-pressed={tab === k} onClick={() => setTab(k)}>{l}</button>)}</div>
-      {g.length === 0 ? <p className="empty">Ancora nessuna operazione chiusa.</p> : (
-        <table className="t">
-          <thead><tr><th>Gruppo</th><th className="n">Op.</th><th className="n">Win</th><th className="n">PnL</th></tr></thead>
-          <tbody>{g.slice(0, 8).map((x) => (
-            <tr key={x.key}><td>{x.key}</td><td className="n">{x.n}</td><td className="n">{pct(x.win_rate)}</td><td className={`n ${x.pnl >= 0 ? "long" : "short"}`}>{signed(x.pnl)}</td></tr>
-          ))}</tbody>
-        </table>
-      )}
-      {r.calibration.length > 0 && (
-        <>
-          <h2 style={{ marginTop: 14 }}>Affidabilità di Kronos <small>direzione corretta a scadenza</small></h2>
-          <table className="t"><tbody>
-            {r.calibration.map((c) => (
-              <tr key={c.label}><td>{c.label}</td><td className="n">{c.n} previsioni</td><td className={`n ${c.hit_rate >= 0.5 ? "long" : "short"}`}>{pct(c.hit_rate, 1)}</td></tr>
-            ))}
-          </tbody></table>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ------------------------------------------------------------------ activity log
-export function ActivityLog({ log }: { log: LogEntry[] }) {
-  return (
-    <div className="panel">
-      <h2>Attività degli agenti</h2>
-      <ul className="log">
-        {log.length === 0 && <li className="empty">Nessuna attività ancora.</li>}
-        {log.map((l, i) => (
-          <li key={`${l.ts}-${i}`}>
-            <span className="who">{l.agent}<br /><span className="faint">{new Date(l.ts * 1000).toLocaleTimeString("it-IT")}</span></span>
-            <span className={l.level}>{l.url ? <a href={l.url} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>{l.text}</a> : l.text}</span>
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }
