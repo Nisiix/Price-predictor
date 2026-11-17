@@ -131,8 +131,10 @@ class Checker:
             reasons.append("rischio aggiuntivo alto")
         if score < settings.min_signal_score:
             reasons.append("punteggio sotto soglia")
-        if not in_zone:
-            reasons.append("in attesa: prezzo lontano dal " + ("minimo" if side > 0 else "massimo") + " delle 4 ore")
+        zone_bypass = not in_zone and extra_risk < settings.zone_bypass_risk
+        if not in_zone and not zone_bypass:
+            reasons.append("in attesa: prezzo lontano dal " + ("minimo" if side > 0 else "massimo")
+                           + f" delle 4 ore e rischio non basso (≥{settings.zone_bypass_risk * 100:.0f}%)")
         costs = 2 * (settings.taker_fee + settings.slippage)
         if side > 0 and median_4h <= price * (1 + costs):
             reasons.append("prezzo attuale già sopra la mediana prevista a 4 ore")
@@ -186,7 +188,7 @@ class Checker:
             "side": "long" if side > 0 else "short", "leverage": lev,
             "p_up_4h": p_up, "conf_4h": conf, "exp_ret_4h": exp_ret, "median_4h": median_4h,
             "forecast_price": c4["last"], "drift": drift,
-            "range_pos": range_pos, "range_hi": hi4, "range_lo": lo4, "in_zone": in_zone,
+            "range_pos": range_pos, "range_hi": hi4, "range_lo": lo4, "in_zone": in_zone, "zone_bypass": zone_bypass,
             "kronos_p_tp": conf,  # probability used by the Controller buckets
             "kronos_p_sl": 1 - conf, "kronos_p_liq": best["p_liq"] if best else 0.0,
             "ev": exp_ret * side * lev,

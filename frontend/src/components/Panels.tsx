@@ -232,7 +232,7 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
         </div>
       )}
       <p className="note" style={{ marginTop: 8 }}>
-        L'Executor apre solo long, quando la probabilità di rialzo a 4 ore supera il 70% (il rischio decide la leva) e il prezzo è nella fascia evidenziata; i token con un calo oltre il 5% in 4, 8 o 12 ore hanno la precedenza:
+        L'Executor apre solo long, quando la probabilità di rialzo a 4 ore supera il 70% (il rischio decide la leva) e il prezzo è nella fascia evidenziata, oppure anche fuori fascia se il rischio è basso (sotto il 35%); i token con un calo oltre il 5% in 4, 8 o 12 ore hanno la precedenza:
         vicino al minimo delle ultime 4 ore per un long, vicino al massimo per uno short. Seleziona una riga per l'analisi completa.
       </p>
     </div>

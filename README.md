@@ -61,6 +61,8 @@ Tutto è modificabile con variabili d'ambiente (vedi `backend/app/config.py`):
 | `PP_MIN_CONF` | 0.70 | l'Executor apre solo se la probabilità a 4 ore supera il 70%, a prescindere dal rischio |
 | `PP_MIN_SCORE` / `PP_MAX_RISK` | 0 / 1 (spenti) | filtri opzionali su probabilità × (1 − rischio) e sul rischio aggiuntivo; il rischio oggi decide solo la leva |
 | `PP_ENTRY_ZONE` | 0.20 | fascia di ingresso: ultimo 20% del range delle 4 ore verso il minimo (long) o il massimo (short) |
+| `PP_ZONE_BYPASS_RISK` | 0.35 | con rischio aggiuntivo sotto il 35% si può aprire anche fuori dalla fascia di ingresso |
+| `PP_MAX_FORECAST_AGE` | 900 | età massima (s) della previsione a 4 ore per aprire |
 | `PP_EXIT_MARGIN` / `PP_EXIT_CONFIRM` | 0.10 / 2 | scarto e conferme per chiudere sull'inversione della previsione |
 | `PP_USE_TP` | 0 | 1 riattiva il take profit fisso +5% con leva |
 | `PP_ANALYST_PAUSE` / `PP_ANALYST_CLOSE` | 55 / 70 | soglie di rischio dell'Analyst |
