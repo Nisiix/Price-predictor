@@ -92,7 +92,7 @@ class PredictionService:
             return c is None or now - c["ts"] > age
 
         for sym in list(self.focus):
-            for tf in ("5s", "1m", "5m", "15m"):
+            for tf in ("1m", "5m", "15m"):  # sub-minute horizons are no longer shown on the dashboard
                 if stale(sym, tf, MAX_AGE[tf]) and self.feed.store.count(sym, tf) >= MIN_BARS[tf]:
                     return sym, tf
         for sym in list(self.priority):
