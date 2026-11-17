@@ -39,7 +39,7 @@ export type PaperCapital = {
 };
 export type ExecutorView = {
   mode: "paper" | "real"; auto: boolean; wallet: string | null; real_ready: boolean; real_auto: boolean; balance: number;
-  equity: number; positions: Position[]; pending: any[]; intents: Intent[]; max_positions: number; margin_usdc: number;
+  equity: number; positions: Position[]; pending: any[]; intents: Intent[]; max_positions: number; margin_usdc: number; risk_tiers: [number, number][]; risk_tier_above: number;
   tp_pct: number; sl_pct: number; use_tp: boolean; exit_margin: number; exit_confirmations: number; entry_zone: number;
   lock_trigger_pct: number; lock_profit_pct: number;
   use_initial_stop: boolean; recovery_hours: number; recovery_min_prob: number; liq_min_distance: number; equity_now: number; hold_losers: boolean; longs_only: boolean;

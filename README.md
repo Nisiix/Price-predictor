@@ -54,7 +54,8 @@ Tutto è modificabile con variabili d'ambiente (vedi `backend/app/config.py`):
 | `PP_KRONOS_MODEL` / `PP_KRONOS_TOKENIZER` | `NeoQuasar/Kronos-mini` / `NeoQuasar/Kronos-Tokenizer-2k` | `NeoQuasar/Kronos-small` con `Kronos-Tokenizer-base` è più accurato ma circa 3,5 volte più lento su CPU |
 | `PP_SAMPLES` | 24 | futuri campionati per previsione |
 | `PP_LOOKBACK` | 128 | candele passate date al modello |
-| `PP_MARGIN_USDC` | 100 | margine massimo per operazione |
+| (fasce di rischio) | 25% → 10%, 30% → 7%, 35% → 5%, 40% → 3% | margine per operazione come quota del capitale totale secondo il rischio aggiuntivo; oltre il 40% si usa il 3% (`PP_RISK_ABOVE_40`); la regola di liquidazione può ridurlo |
+| `PP_MARGIN_USDC` | 100 | margine proposto nel pannello ordini manuale |
 | `PP_LIQ_DISTANCE` | 0.5 | long: l'importo è calcolato (margine incrociato) perché la liquidazione di ogni posizione resti almeno al 50% dall'entrata; si aprono long finché la regola lo permette. Short: margine fisso se c'è collaterale libero |
 | `PP_MAX_POSITIONS` | 0 | limite fisso di posizioni (0 = nessuno, decide la regola di liquidazione) |
 | `PP_TP_PCT` / `PP_SL_PCT` | 5 / 2 | take profit e stop loss in % con leva |

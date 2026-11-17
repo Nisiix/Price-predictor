@@ -203,25 +203,35 @@ class Executor:
             return False, f"il prezzo attuale {price:.6g} ha già raggiunto la mediana prevista {median:.6g}"
         return True, ""
 
-    def size_margin(self, sym: str, leverage: float, side: int = 1) -> tuple[float, str]:
-        """Largest margin (<= margin_usdc) such that, even if every open position and the new one moved
+    @staticmethod
+    def risk_share(risk: float) -> float:
+        """Share of total capital for one trade, from the token's extra risk (user tiers)."""
+        for limit, share in settings.risk_tiers:
+            if risk <= limit:
+                return share
+        return settings.risk_tier_above
+
+    def size_margin(self, sym: str, leverage: float, side: int = 1, risk: float = 0.0) -> tuple[float, str]:
+        """Margin = risk tier x total capital, then capped so that, even if every open position and the new one moved
         `liq_min_distance` against us at the same time, the account would still be above maintenance:
         sum(N_j * (d + mmr_j)) + N_new * (d + mmr_new) <= equity. That keeps each liquidation price at
         least d (50%) away from its entry."""
         if side < 0:
             # user rule: the liquidation-distance sizing applies to longs only; shorts use the fixed margin
             # as long as the account has that much free collateral left
+            target = self.risk_share(risk) * self.equity()
             used = sum(p.margin for p in self.open_positions())
             free = self.equity() - used
-            if free < settings.margin_usdc:
-                return 0.0, f"collaterale libero insufficiente ({free:.2f} USDC) per uno short da {settings.margin_usdc:g} USDC"
-            return settings.margin_usdc, ""
+            if free < target:
+                return 0.0, f"collaterale libero insufficiente ({free:.2f} USDC) per uno short da {target:.2f} USDC"
+            return target, ""
         d = settings.liq_min_distance
         c = 2 * (settings.taker_fee + settings.slippage) + 0.001  # entry/exit costs and a small buffer
         mmr = self.feed.markets[sym].mmr
         room = self.equity() - sum(n * (d + r + c) for n, r in self._exposures())
         notional = max(0.0, room / (d + mmr + c))
-        margin = min(settings.margin_usdc, notional / leverage)
+        target = self.risk_share(risk) * self.equity()  # 3%-10% of total capital by risk
+        margin = min(target, notional / leverage)
         if margin < settings.min_margin_usdc:
             return 0.0, f"capitale insufficiente per tenere la liquidazione al {d * 100:.0f}% dall'entrata"
         return margin, ""
@@ -280,7 +290,7 @@ class Executor:
             self.cooldown[sym] = time.time() + 120
             self.bus.agent_log("Executor", f"{sig['base']}: apertura annullata, {why}", "warn")
             return
-        margin, why = self.size_margin(sym, sig["leverage"], side)
+        margin, why = self.size_margin(sym, sig["leverage"], side, sig.get("extra_risk") or 0.0)
         if not margin:
             self.cooldown[sym] = time.time() + 600
             self.bus.agent_log("Executor", f"{sig['base']}: apertura saltata, {why}", "warn")
@@ -653,6 +663,7 @@ class Executor:
             "real_auto": self.real_auto, "balance": self.balance, "equity": equity, "positions": open_,
             "pending": [o.view() for o in self.pending.values()], "intents": list(self.intents.values()),
             "max_positions": settings.max_positions, "margin_usdc": settings.margin_usdc,
+            "risk_tiers": [list(t) for t in settings.risk_tiers], "risk_tier_above": settings.risk_tier_above,
             "tp_pct": settings.take_profit_pct, "sl_pct": settings.stop_loss_pct,
             "use_tp": settings.use_take_profit, "exit_margin": settings.exit_margin,
             "exit_confirmations": settings.exit_confirmations, "entry_zone": settings.entry_zone,

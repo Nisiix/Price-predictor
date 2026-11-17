@@ -258,7 +258,7 @@ def test_no_loss_stop_by_default_recovery_check_after_hours(monkeypatch):
 def test_sizing_keeps_every_liquidation_half_the_entry_away():
     feed, ctl, ex = make()
     p1 = open_long(ex, lev=20)
-    assert p1.margin < settings.margin_usdc  # 100 USDC at 20x would put liquidation too close on 1000 USDC
+    assert p1.margin < 0.10 * 1000  # 10% (risk 20%) at 20x would put liquidation too close on 1000 USDC
     # second position on another market
     feed.markets["PERP_ETH_USDC"] = Market("PERP_ETH_USDC", "ETH", "Ethereum", 2, 20, 0.05, 0.025, 0.01, 0.01, 0.001, 10,
                                            mark_price=2000.0)
@@ -267,7 +267,7 @@ def test_sizing_keeps_every_liquidation_half_the_entry_away():
     asyncio.run(ex.open_from_signal(sig))
     ps = ex.open_positions()
     short = [q for q in ps if q.side < 0][0]
-    assert short.margin == settings.margin_usdc  # shorts: fixed margin, no liquidation-distance sizing
+    assert short.margin == pytest.approx(0.07 * 1000, rel=0.02)  # risk 30% -> 7% of capital, no liquidation sizing
     for q in ps:
         q.liq = ex.cross_liq(q)
     assert p1.liq <= p1.entry * 0.5 * 1.05  # the long stays far from liquidation (within the short's extra load)
@@ -324,3 +324,14 @@ def test_predicted_dip_finds_the_low_before_the_rise():
     paths[:, :, 2] = lows
     price, i = predicted_dip(paths, 6)
     assert price == pytest.approx(98.6) and i == 2
+
+
+def test_risk_tiers_share_of_capital():
+    from app.agents.executor import Executor as E
+
+    assert E.risk_share(0.20) == 0.10 and E.risk_share(0.25) == 0.10
+    assert E.risk_share(0.28) == 0.07 and E.risk_share(0.33) == 0.05
+    assert E.risk_share(0.40) == 0.03 and E.risk_share(0.55) == settings.risk_tier_above
+    feed, ctl, ex = make()
+    p = open_long(ex, lev=10)  # risk 0.2 -> 10% of 1000 = 100 USDC, fits the liquidation rule at 10x
+    assert p.margin == pytest.approx(100.0, rel=0.01)

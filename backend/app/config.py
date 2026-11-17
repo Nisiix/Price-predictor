@@ -47,7 +47,11 @@ class Settings:
     leverage_choices: tuple[int, ...] = (10, 12, 15, 20)
     take_profit_pct: float = _f("PP_TP_PCT", 5.0)  # leveraged move, % of margin
     stop_loss_pct: float = _f("PP_SL_PCT", 2.0)  # leveraged move, % of margin
-    margin_usdc: float = _f("PP_MARGIN_USDC", 100.0)  # maximum margin per trade (sizing may use less)
+    margin_usdc: float = _f("PP_MARGIN_USDC", 100.0)  # default margin for manual tickets only
+    # user rule: margin per trade as a share of total capital, by extra risk (risk <= threshold -> share);
+    # above the last threshold the smallest share is used. The liquidation sizing can still lower it.
+    risk_tiers: tuple[tuple[float, float], ...] = ((0.25, 0.10), (0.30, 0.07), (0.35, 0.05), (0.40, 0.03))
+    risk_tier_above: float = _f("PP_RISK_ABOVE_40", 0.03)
     # cross-margin sizing (user rule): every position's liquidation price must stay at least this far from its
     # entry (0.5 = a long liquidates only below half its entry price, a short only above 1.5x)
     liq_min_distance: float = _f("PP_LIQ_DISTANCE", 0.5)
