@@ -97,7 +97,8 @@ class Checker:
         extra_risk = float(sum(risk_parts[k] * w for k, w in weights.items()))
         combined = 0.6 * p_tp + 0.25 * (analog_win if analog_win is not None else p_tp) + 0.15 * ind_agree
         score = combined * (1 - 0.5 * extra_risk)
-        eligible = best["ev"] > 0 and score >= settings.min_signal_score and extra_risk <= 0.6
+        eligible = (best["ev"] > 0 and score >= settings.min_signal_score and extra_risk <= 0.6
+                    and p_tp > p_adverse)
         reasons = []
         if best["ev"] <= 0:
             reasons.append("valore atteso negativo dopo commissioni")
@@ -105,6 +106,8 @@ class Checker:
             reasons.append("punteggio sotto soglia")
         if extra_risk > 0.6:
             reasons.append("rischio aggiuntivo alto")
+        if p_tp <= p_adverse:
+            reasons.append("Kronos vede più probabile lo stop")
 
         return {
             "symbol": sym, "base": m.base, "name": m.name, "rank": m.rank, "price": c["last"],

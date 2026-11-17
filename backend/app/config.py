@@ -54,7 +54,7 @@ class Settings:
     slippage: float = _f("PP_SLIPPAGE", 0.0002)  # per side, on price
 
     # --- checker / analyst ------------------------------------------------------
-    min_signal_score: float = _f("PP_MIN_SCORE", 0.55)
+    min_signal_score: float = _f("PP_MIN_SCORE", 0.40)
     analyst_close_threshold: float = _f("PP_ANALYST_CLOSE", 70.0)
     analyst_pause_threshold: float = _f("PP_ANALYST_PAUSE", 55.0)
     news_poll_s: int = _i("PP_NEWS_POLL_S", 120)
