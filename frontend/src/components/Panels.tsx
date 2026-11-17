@@ -19,6 +19,14 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
     setOnlyStrong(v);
     try { localStorage.setItem("pp.only70", v ? "1" : "0"); } catch { /* ignore */ }
   };
+  // the Executor opens longs only: by default the list shows upward forecasts only
+  const [showDown, setShowDown] = useState<boolean>(() => {
+    try { return localStorage.getItem("pp.showDown") === "1"; } catch { return false; }
+  });
+  const toggleDown = (v: boolean) => {
+    setShowDown(v);
+    try { localStorage.setItem("pp.showDown", v ? "1" : "0"); } catch { /* ignore */ }
+  };
   const [sortBy, setSortBy] = useState<SortMode>(() => {
     try {
       const v = localStorage.getItem("pp.sort") as SortMode | null;
@@ -41,9 +49,10 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
       .filter((x) => !ql || x.m.base.toLowerCase().includes(ql) || x.m.name.toLowerCase().includes(ql))
       // probability filter: only tokens whose forecast on the chosen horizon is above 70%, whatever the risk
       .filter((x) => !onlyStrong || (x.b != null && x.b.conf > STRONG_PROB))
+      .filter((x) => showDown || (x.b != null && x.b.dir === "up"))
       // tokens without the needed numbers go last, by market cap
       .sort((a, b) => sortKey(b, sortBy) - sortKey(a, sortBy) || a.m.rank - b.m.rank);
-  }, [markets, byRank, probs, q, sortBy, onlyStrong]);
+  }, [markets, byRank, probs, q, sortBy, onlyStrong, showDown]);
 
   return (
     <div className="panel">
@@ -52,7 +61,11 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
       </h2>
       <label className="switch" style={{ padding: "0 8px", marginBottom: 6, fontSize: 12.5 }}>
         <input type="checkbox" checked={onlyStrong} onChange={(e) => toggleStrong(e.target.checked)} />
-        Solo probabilità sopra il 70% {onlyStrong && ready > 0 && <span className="faint">({rows.length} di {ready})</span>}
+        Solo probabilità sopra il 70% {(onlyStrong || !showDown) && ready > 0 && <span className="faint">({rows.length} di {ready})</span>}
+      </label>
+      <label className="switch" style={{ padding: "0 8px", marginBottom: 6, fontSize: 12.5 }}>
+        <input type="checkbox" checked={showDown} onChange={(e) => toggleDown(e.target.checked)} />
+        Mostra anche i ribassi <span className="faint">(l'Executor apre solo long)</span>
       </label>
       <div className="tabs" role="group" aria-label="Ordina i token" style={{ padding: "0 8px" }}>
         {SORTS.map(([k, l]) => <button key={k} aria-pressed={sortBy === k} onClick={() => changeSort(k)}>{l}</button>)}
@@ -97,7 +110,7 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
         })}
         {!rows.length && (
           <li className="empty" style={{ padding: 8 }}>
-            {onlyStrong && !q ? `Nessun token supera il 70% di probabilità a ${horizonName(horizon)}. Prova un altro orizzonte o togli il filtro.` : "Nessun token corrisponde alla ricerca."}
+            {q ? "Nessun token corrisponde alla ricerca." : `Nessun token ${showDown ? "" : "in rialzo "}${onlyStrong ? "supera il 70% di probabilità " : ""}a ${horizonName(horizon)}. Prova un altro orizzonte o allarga i filtri.`}
           </li>
         )}
       </ul>
