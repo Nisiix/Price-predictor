@@ -63,6 +63,7 @@ class Position:
     venue_order_id: str | None = None
     p_dir_now: float | None = None  # latest Kronos 4h probability of the position's direction
     locked: bool = False  # stop moved into profit after the +5% leveraged gain
+    recovery_prob: float | None = None  # Kronos 4h chance of getting back to break-even (checked after N hours)
     peak_lev_move: float = 0.0
     last_pred_ts: float = 0.0
     reverse_count: int = 0
@@ -136,7 +137,8 @@ class Executor:
         lv = trade_levels(entry, side, lev, settings.take_profit_pct, settings.stop_loss_pct, m.mmr)
         p = Position(
             id=f"P{next(_ids)}", symbol=sym, base=m.base, side=side, leverage=lev, margin=margin, entry=entry,
-            qty=notional / entry, notional=notional, tp=tp or lv["tp"], sl=sl or lv["sl"], liq=lv["liq"],
+            qty=notional / entry, notional=notional, tp=tp or lv["tp"],
+            sl=sl or (lv["sl"] if settings.use_initial_stop else 0.0), liq=lv["liq"],
             mode=mode, origin=origin, signal=signal or {}, fees=notional * settings.taker_fee, last_price=price,
         )
         self._mark(p, price)
@@ -249,7 +251,7 @@ class Executor:
         p.peak_lev_move = max(p.peak_lev_move, p.lev_move)
         if (p.side > 0 and price <= p.liq) or (p.side < 0 and price >= p.liq):
             return "liquidazione"
-        if (p.side > 0 and price <= p.sl) or (p.side < 0 and price >= p.sl):
+        if p.sl > 0 and ((p.side > 0 and price <= p.sl) or (p.side < 0 and price >= p.sl)):
             if p.locked:
                 return f"stop di protezione +{settings.lock_profit_pct:g}% (leva)"
             return f"stop loss {-settings.stop_loss_pct:g}% (leva)"
@@ -262,7 +264,7 @@ class Executor:
     def _lock_profit(self, p: Position) -> None:
         """After +5% leveraged, move the stop to +2% leveraged profit (never below the current stop)."""
         new_sl = p.entry * (1 + p.side * settings.lock_profit_pct / 100 / p.leverage)
-        if (p.side > 0 and new_sl <= p.sl) or (p.side < 0 and new_sl >= p.sl):
+        if p.sl > 0 and ((p.side > 0 and new_sl <= p.sl) or (p.side < 0 and new_sl >= p.sl)):
             return
         p.sl, p.locked = new_sl, True
         self.bus.agent_log(
@@ -294,6 +296,25 @@ class Executor:
         if p.reverse_count >= settings.exit_confirmations:
             opp = 1 - p.p_dir_now
             return f"inversione della previsione 4h ({'ribasso' if p.side > 0 else 'rialzo'} al {opp * 100:.0f}%)"
+        return self._recovery(p, c)
+
+    def _recovery(self, p: Position, c: dict) -> str | None:
+        """No stop in loss: after `recovery_hours`, a losing position is closed only if the 4h projection
+        gives little chance (< recovery_min_prob) of touching break-even (entry + round-trip costs)."""
+        if p.locked or p.pnl >= 0 or time.time() - p.opened_ts < settings.recovery_hours * 3600:
+            p.recovery_prob = None if p.pnl >= 0 else p.recovery_prob
+            return None
+        from ..config import HORIZONS
+
+        steps = HORIZONS["4h"][2]
+        cost = 2 * (settings.taker_fee + settings.slippage)
+        be = p.entry * (1 + p.side * cost)
+        path = c["paths"][:, :steps, :]
+        hit = (path[:, :, 1] >= be).any(axis=1) if p.side > 0 else (path[:, :, 2] <= be).any(axis=1)
+        p.recovery_prob = float(hit.mean())
+        if p.recovery_prob < settings.recovery_min_prob:
+            hours = (time.time() - p.opened_ts) / 3600
+            return f"nessun recupero previsto dopo {hours:.1f} h (pareggio entro 4 h al {p.recovery_prob * 100:.0f}%)"
         return None
 
     async def run(self) -> None:
@@ -366,7 +387,7 @@ class Executor:
         self._intent({
             "action": "open", "symbol": sym, "base": m.base, "side": "long" if side > 0 else "short",
             "leverage": lev, "margin": margin, "qty": qty, "price": price,
-            "tp": lv["tp"] if settings.use_take_profit else None, "sl": lv["sl"],
+            "tp": lv["tp"] if settings.use_take_profit else None, "sl": lv["sl"] if settings.use_initial_stop else None,
             "base_tick": m.base_tick, "quote_tick": m.quote_tick, "origin": origin, "signal": snapshot,
         })
         self.bus.agent_log("Executor", f"Richiesta ordine REALE {('LONG' if side > 0 else 'SHORT')} {m.base} {lev}x inviata alla dashboard per la firma", "warn")
@@ -456,4 +477,6 @@ class Executor:
             "use_tp": settings.use_take_profit, "exit_margin": settings.exit_margin,
             "exit_confirmations": settings.exit_confirmations, "entry_zone": settings.entry_zone,
             "lock_trigger_pct": settings.lock_trigger_pct, "lock_profit_pct": settings.lock_profit_pct,
+            "use_initial_stop": settings.use_initial_stop, "recovery_hours": settings.recovery_hours,
+            "recovery_min_prob": settings.recovery_min_prob,
         }

@@ -29,15 +29,16 @@ export type Position = {
   id: string; symbol: string; base: string; side: "long" | "short"; leverage: number; margin: number; entry: number;
   qty: number; notional: number; tp: number; sl: number; liq: number; mode: string; origin: string; opened_ts: number;
   fees: number; funding: number; last_price: number; status: string; pnl: number; roe: number; lev_move: number; signal: any;
-  p_dir_now: number | null; reverse_count: number; locked: boolean;
+  p_dir_now: number | null; reverse_count: number; locked: boolean; recovery_prob: number | null;
 };
 export type ExecutorView = {
   mode: "paper" | "real"; auto: boolean; wallet: string | null; real_ready: boolean; real_auto: boolean; balance: number;
   equity: number; positions: Position[]; pending: any[]; intents: Intent[]; max_positions: number; margin_usdc: number;
   tp_pct: number; sl_pct: number; use_tp: boolean; exit_margin: number; exit_confirmations: number; entry_zone: number;
   lock_trigger_pct: number; lock_profit_pct: number;
+  use_initial_stop: boolean; recovery_hours: number; recovery_min_prob: number;
 };
-export type Intent = { id: string; ts: number; action: "open" | "close" | "update_sl"; symbol: string; base?: string; side: "long" | "short"; leverage?: number; margin?: number; qty: number; price?: number; tp?: number | null; sl?: number; base_tick?: number; quote_tick?: number; position_id?: string; reason?: string };
+export type Intent = { id: string; ts: number; action: "open" | "close" | "update_sl"; symbol: string; base?: string; side: "long" | "short"; leverage?: number; margin?: number; qty: number; price?: number; tp?: number | null; sl?: number | null; base_tick?: number; quote_tick?: number; position_id?: string; reason?: string };
 export type Headline = { id: string; title: string; source: string; url: string; ts: number; categories: string[]; calming: boolean; severity: number; analog: { date: string; title: string; btc_move: number } | null };
 export type AnalystView = { risk: number; components: Record<string, number>; fear_greed: { value: number; label: string } | null; status: string; close_threshold: number; pause_threshold: number; headlines: Headline[] };
 export type Group = { key: string; n: number; wins: number; win_rate: number; pnl: number; avg_roe: number; profit_factor: number | null };

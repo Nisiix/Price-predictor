@@ -62,6 +62,11 @@ class Settings:
     exit_margin: float = _f("PP_EXIT_MARGIN", 0.10)  # reversal only if the opposite direction reaches 50% + margin
     exit_confirmations: int = _i("PP_EXIT_CONFIRM", 2)  # consecutive 4h forecasts confirming the reversal
     use_take_profit: bool = os.getenv("PP_USE_TP", "0") == "1"  # fixed +5% take profit (off: exit on reversal)
+    # no stop in loss (user rule): after `recovery_hours` a losing position is closed only if the
+    # Kronos 4h projection gives less than `recovery_min_prob` of getting back to break-even
+    use_initial_stop: bool = os.getenv("PP_USE_SL", "0") == "1"  # 1 restores the fixed -2% leveraged stop
+    recovery_hours: float = _f("PP_RECOVERY_HOURS", 2.0)
+    recovery_min_prob: float = _f("PP_RECOVERY_MIN_PROB", 0.5)
     lock_trigger_pct: float = _f("PP_LOCK_TRIGGER", 5.0)  # once the leveraged gain reaches +5%...
     lock_profit_pct: float = _f("PP_LOCK_PROFIT", 2.0)  # ...the stop moves to +2% leveraged profit
     analyst_close_threshold: float = _f("PP_ANALYST_CLOSE", 70.0)

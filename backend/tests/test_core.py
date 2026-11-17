@@ -134,7 +134,8 @@ def test_take_profit_at_plus_5_leveraged(monkeypatch):
     assert t.pnl < settings.margin_usdc * 0.05  # fees are paid
 
 
-def test_stop_loss_at_minus_2_leveraged():
+def test_stop_loss_at_minus_2_leveraged(monkeypatch):
+    monkeypatch.setattr(settings, "use_initial_stop", True)
     feed, ctl, ex = make()
     p = open_long(ex)
     r = step(ex, feed, p.entry * 0.9979)
@@ -210,3 +211,23 @@ def test_profit_lock_moves_stop_to_plus_2_after_plus_5():
     r = step(ex, feed, p.entry * 1.0019)  # back below the lock level
     assert r.startswith("stop di protezione")
     assert ctl.trades[-1].lev_move > 0  # closed in profit (gross)
+
+
+def test_no_loss_stop_by_default_recovery_check_after_hours():
+    feed, ctl, ex = make()
+    p = open_long(ex)
+    assert p.sl == 0.0
+    assert step(ex, feed, p.entry * 0.99) is None  # -10% leveraged: no stop in loss
+
+    def cache(high):
+        n, L = 24, 16
+        paths = np.full((n, L, 4), p.entry * 0.99)
+        paths[:, :, 1] = high
+        return {"ts": 0, "last": p.entry * 0.99, "paths": paths}
+
+    p.opened_ts -= 1.0 * 3600  # 1 h: too early to judge
+    assert ex._recovery(p, cache(p.entry * 0.995)) is None
+    p.opened_ts -= 1.5 * 3600  # 2.5 h, projection never reaches break-even -> close
+    r = ex._recovery(p, cache(p.entry * 0.995))
+    assert r and r.startswith("nessun recupero") and p.recovery_prob == 0
+    assert ex._recovery(p, cache(p.entry * 1.01)) is None  # projection recovers -> keep
