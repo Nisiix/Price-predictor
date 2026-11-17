@@ -22,7 +22,8 @@ log = logging.getLogger("predict")
 
 MIN_BARS = {"5s": 48, "1m": 64, "5m": 64}
 MAX_AGE = {"5s": 5.0, "1m": 30.0, "5m": 120.0}  # refresh interval for the focus token
-SCAN_AGE = 150.0  # refresh interval for universe scan on 1m
+SCAN_AGE = 150.0  # refresh interval for universe scan on 1m (Checker)
+BOARD_AGE = {"5s": 40.0, "1m": 90.0, "5m": 150.0}  # refresh for the horizon chosen on the dashboard
 
 
 class PredictionService:
@@ -33,6 +34,9 @@ class PredictionService:
         self.focus: set[str] = set()
         self.priority: set[str] = set()  # tokens with open positions
         self._rr = 0
+        self._rr_board = 0
+        self._turn = 0
+        self.board_horizons: set[str] = {"15m"}  # horizons the open dashboards sort their token list by
         self.calib = Calibration()
         self.busy_with: str | None = None
         self.inferences = 0
@@ -94,13 +98,36 @@ class PredictionService:
         for sym in list(self.priority):
             if stale(sym, "1m", 30.0) and self.feed.store.count(sym, "1m") >= MIN_BARS["1m"]:
                 return sym, "1m"
-        syms = [s for s in self.feed.markets if self.feed.store.count(s, "1m") >= MIN_BARS["1m"]]
-        for _ in range(len(syms)):
-            self._rr = (self._rr + 1) % len(syms)
-            sym = syms[self._rr]
-            if stale(sym, "1m", SCAN_AGE):
-                return sym, "1m"
+        # alternate the Checker scan (1m) with the scan of the dashboard's horizon timeframe
+        board_tfs = sorted({HORIZONS[h][1] for h in self.board_horizons if h in HORIZONS} or {"1m"})
+        self._turn += 1
+        board_jobs = [("board", board_tfs[(self._turn // 2) % len(board_tfs)])]
+        order = board_jobs + [("checker", "1m")] if self._turn % 2 else [("checker", "1m")] + board_jobs
+        for kind, tf in order:
+            job = self._scan(tf, BOARD_AGE[tf] if kind == "board" else SCAN_AGE, kind, stale)
+            if job:
+                return job
         return None
+
+    def _scan(self, tf: str, age: float, kind: str, stale) -> tuple[str, str] | None:
+        syms = [s for s in self.feed.markets if self.feed.store.count(s, tf) >= MIN_BARS[tf]]
+        if not syms:
+            return None
+        attr = "_rr_board" if kind == "board" else "_rr"
+        # stalest first, so a horizon switch refreshes the whole list quickly
+        best = None
+        for _ in range(len(syms)):
+            i = (getattr(self, attr) + 1) % len(syms)
+            setattr(self, attr, i)
+            sym = syms[i]
+            if stale(sym, tf, age):
+                c = self.cache.get((sym, tf))
+                t = c["ts"] if c else 0.0
+                if best is None or t < best[0]:
+                    best = (t, sym)
+                if t == 0.0:
+                    break
+        return (best[1], tf) if best else None
 
     async def run(self) -> None:
         await asyncio.to_thread(self.engine.load)
@@ -140,6 +167,23 @@ class PredictionService:
             })
             out[label] = st
         return out
+
+    def board(self, label: str) -> dict:
+        """Probability for one horizon across the whole universe (dashboard token list)."""
+        secs, tf, step = HORIZONS[label]
+        rows = {}
+        now = time.time()
+        for sym in self.feed.markets:
+            c = self.cache.get((sym, tf))
+            if not c:
+                continue
+            closes = c["paths"][:, step - 1, 3]
+            p_up = float((closes > c["last"]).mean())
+            rows[sym] = {
+                "p_up": p_up, "dir": "up" if p_up >= 0.5 else "down", "conf": max(p_up, 1 - p_up),
+                "exp_ret": float((closes / c["last"] - 1).mean()), "age": now - c["ts"], "source": c["source"],
+            }
+        return {"h": label, "tf": tf, "rows": rows}
 
     def snapshot(self, sym: str) -> dict:
         res = {"symbol": sym, "horizons": self.horizons(sym), "fans": {}, "trade": None}

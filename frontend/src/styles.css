@@ -243,3 +243,17 @@ table.t td.n, table.t th.n { text-align: right; }
 .tabs button[aria-pressed="true"] { background: var(--hull-2); color: var(--text); }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--hull-2); border: 1px solid var(--line); padding: 10px 16px; border-radius: 10px; font-size: 13px; z-index: 20; max-width: min(560px, calc(100vw - 32px)); }
 .intent { border: 1px solid var(--warn); border-radius: 10px; padding: 10px; font-size: 13px; display: grid; gap: 6px; }
+
+/* ------------------------------------------------------------ horizon selector */
+.hsel { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+.hsel select {
+  background: var(--ink); color: var(--text); border: 1px solid var(--kronos); border-radius: var(--r-control);
+  padding: 6px 30px 6px 10px; font: 600 14px var(--display); cursor: pointer; appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--kronos) 50%), linear-gradient(135deg, var(--kronos) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%; background-size: 5px 5px; background-repeat: no-repeat;
+}
+.rung.sel { background: var(--hull-2); border-radius: 8px; margin: 0 -8px; padding-left: 8px; padding-right: 8px; border-bottom-color: transparent; }
+.hbtn { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: inherit; text-decoration: underline dotted var(--faint); text-underline-offset: 3px; }
+.rung.sel .hbtn { color: var(--kronos); text-decoration: none; }
+.wl .prob { text-align: right; font: 650 15px var(--display); }
+.wl .meta .side-tag { margin-left: 2px; }

@@ -36,6 +36,11 @@ analyst = Analyst(feed, checker, executor, bus)
 executor.predictor = predictor
 controller.predictor = predictor
 _focus: dict[str, float] = {}
+_client_horizon: dict[int, str] = {}  # each open dashboard sorts by its own horizon
+
+
+def _sync_horizons() -> None:
+    predictor.board_horizons = set(_client_horizon.values()) or {"15m"}
 STARTED = time.time()
 
 
@@ -51,6 +56,7 @@ async def _ticker() -> None:
             bus.publish("tick", {
                 "prices": {s: {"p": m.mark_price, "c": m.change_24h} for s, m in feed.markets.items()},
                 "focus": {s: predictor.snapshot(s) for s in _focus},
+                "boards": {h: predictor.board(h) for h in predictor.board_horizons},
                 "system": system_status(),
             })
         except Exception:
@@ -256,6 +262,13 @@ def real_positions(v: VenuePositions):
     return {"ok": True}
 
 
+@app.get("/api/board")
+def board(h: str = "15m"):
+    if h not in HORIZONS:
+        raise HTTPException(400, f"h must be one of {list(HORIZONS)}")
+    return predictor.board(h)
+
+
 @app.get("/api/report")
 def report():
     return controller.report()
@@ -288,11 +301,16 @@ async def ws(socket: WebSocket):
                 _focus.clear()
                 _focus[msg["symbol"]] = time.time()
                 predictor.focus = set(_focus)
+            elif msg.get("type") == "horizon" and msg.get("h") in HORIZONS:
+                _client_horizon[id(socket)] = msg["h"]
+                _sync_horizons()
             elif msg.get("type") == "ping" and msg.get("symbol") in feed.markets:
                 _focus[msg["symbol"]] = time.time()
     except WebSocketDisconnect:
         pass
     finally:
+        _client_horizon.pop(id(socket), None)
+        _sync_horizons()
         bus.unsubscribe(q)
         try:
             sender.cancel()

@@ -44,16 +44,19 @@ export type System = {
   checker: { paused: boolean; reason: string; ranked: number; signals: number }; analyst: { risk: number; status: string }; executor: { mode: string };
 };
 
+export type BoardRow = { p_up: number; dir: "up" | "down"; conf: number; exp_ret: number; age: number; source: string };
+export type Board = { h: string; tf: string; rows: Record<string, BoardRow> };
+
 export type LiveState = {
   connected: boolean; system: System | null; markets: Market[]; prices: Record<string, { p: number; c: number }>;
   focus: Record<string, Snapshot>; ranking: CheckerRow[]; paused: boolean; pauseReason: string;
   executor: ExecutorView | null; analyst: AnalystView | null; report: Report | null; log: LogEntry[];
-  intents: Intent[]; settings: any;
+  intents: Intent[]; settings: any; boards: Record<string, Board>;
 };
 
 const initial: LiveState = {
   connected: false, system: null, markets: [], prices: {}, focus: {}, ranking: [], paused: false, pauseReason: "",
-  executor: null, analyst: null, report: null, log: [], intents: [], settings: null,
+  executor: null, analyst: null, report: null, log: [], intents: [], settings: null, boards: {},
 };
 
 export async function api<T = any>(path: string, init?: RequestInit): Promise<T> {
@@ -63,11 +66,13 @@ export async function api<T = any>(path: string, init?: RequestInit): Promise<T>
 }
 export const postJSON = <T = any>(path: string, body: unknown) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
 
-export function useLive(focusSymbol: string | null) {
+export function useLive(focusSymbol: string | null, horizon: string) {
   const [state, setState] = useState<LiveState>(initial);
   const wsRef = useRef<WebSocket | null>(null);
   const focusRef = useRef(focusSymbol);
   focusRef.current = focusSymbol;
+  const horizonRef = useRef(horizon);
+  horizonRef.current = horizon;
 
   useEffect(() => {
     let alive = true;
@@ -90,6 +95,7 @@ export function useLive(focusSymbol: string | null) {
       ws.onopen = () => {
         setState((s) => ({ ...s, connected: true }));
         if (focusRef.current) ws.send(JSON.stringify({ type: "focus", symbol: focusRef.current }));
+        ws.send(JSON.stringify({ type: "horizon", h: horizonRef.current }));
       };
       ws.onclose = () => {
         setState((s) => ({ ...s, connected: false }));
@@ -119,6 +125,13 @@ export function useLive(focusSymbol: string | null) {
     if (focusSymbol && ws?.readyState === 1) ws.send(JSON.stringify({ type: "focus", symbol: focusSymbol }));
   }, [focusSymbol]);
 
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (ws?.readyState === 1) ws.send(JSON.stringify({ type: "horizon", h: horizon }));
+    // the board for a new horizon fills in progressively; show what is already cached now
+    api<Board>(`/api/board?h=${horizon}`).then((b) => setState((s) => ({ ...s, boards: { ...s.boards, [b.h]: b } }))).catch(() => {});
+  }, [horizon]);
+
   return state;
 }
 
@@ -126,7 +139,7 @@ function reduce(s: LiveState, msg: { type: string; data: any }): LiveState {
   const d = msg.data;
   switch (msg.type) {
     case "tick":
-      return { ...s, prices: d.prices, focus: { ...s.focus, ...d.focus }, system: d.system };
+      return { ...s, prices: d.prices, focus: { ...s.focus, ...d.focus }, system: d.system, boards: { ...s.boards, ...(d.boards ?? {}) } };
     case "ranking":
       return { ...s, ranking: d.rows, paused: d.paused, pauseReason: d.pause_reason };
     case "executor":

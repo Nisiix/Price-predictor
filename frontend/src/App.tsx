@@ -2,20 +2,35 @@ import { useEffect, useMemo, useState } from "react";
 import { api, pct, price, signed, useLive } from "./api";
 import type { Snapshot } from "./api";
 import { Chart, fmtDur } from "./components/Chart";
-import { ActivityLog, AnalystPanel, ControllerPanel, HorizonLadder, Positions, Verdict, Watchlist } from "./components/Panels";
+import { ActivityLog, AnalystPanel, ControllerPanel, HORIZON_CHOICES, HorizonLadder, Positions, Verdict, Watchlist, horizonName } from "./components/Panels";
 import { Ticket, WalletPanel } from "./components/Ticket";
 import { useRealTrading } from "./wallet/useRealTrading";
 
 const TF_SECONDS: Record<string, number> = { "5s": 5, "1m": 60, "5m": 300 };
-const TF_LABEL: Record<string, string> = { "5s": "5 s · 10s-30s", "1m": "1 min · 1-15 min", "5m": "5 min · 30 min-1 h" };
+// horizon -> [candle timeframe, steps on that timeframe] (mirrors backend/app/config.py HORIZONS)
+const HORIZON_TF: Record<string, ["5s" | "1m" | "5m", number]> = {
+  "5s": ["5s", 1], "10s": ["5s", 2], "30s": ["5s", 6], "1m": ["1m", 1], "15m": ["1m", 15], "30m": ["5m", 6], "1h": ["5m", 12],
+};
+const TF_NAME: Record<string, string> = { "5s": "candele da 5 secondi", "1m": "candele da 1 minuto", "5m": "candele da 5 minuti" };
 
 export default function App() {
   const [focus, setFocus] = useState<string | null>(() => {
     try { return localStorage.getItem("pp.focus"); } catch { return null; }
   });
-  const live = useLive(focus);
+  const [horizon, setHorizon] = useState<string>(() => {
+    try {
+      const h = localStorage.getItem("pp.horizon");
+      return h && HORIZON_TF[h] ? h : "15m";
+    } catch {
+      return "15m";
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("pp.horizon", horizon); } catch { /* ignore */ }
+  }, [horizon]);
+  const live = useLive(focus, horizon);
   const real = useRealTrading(live.executor, live.markets);
-  const [tf, setTf] = useState<"5s" | "1m" | "5m">("1m");
+  const [tf, steps] = HORIZON_TF[horizon];
   const [bars, setBars] = useState<number[][]>([]);
   const [detail, setDetail] = useState<Snapshot | undefined>();
   const [toast, setToast] = useState<string | null>(null);
@@ -23,7 +38,7 @@ export default function App() {
   // default focus: best Checker token, else SOL
   useEffect(() => {
     if (focus || !live.markets.length) return;
-    const pick = live.ranking[0]?.symbol ?? live.markets.find((m) => m.base === "SOL")?.symbol ?? live.markets[0].symbol;
+    const pick = live.markets.find((m) => m.base === "SOL")?.symbol ?? live.markets[0].symbol;
     setFocus(pick);
   }, [live.markets, live.ranking, focus]);
   useEffect(() => {
@@ -58,7 +73,12 @@ export default function App() {
 
   const m = live.markets.find((x) => x.symbol === focus);
   const snap: Snapshot | undefined = focus ? { ...(detail ?? ({} as Snapshot)), ...(live.focus[focus] ?? {}), checker: detail?.checker } : undefined;
-  const fan = snap?.fans?.[tf] ?? null;
+  // cone trimmed to the selected horizon
+  const fullFan = snap?.fans?.[tf] ?? null;
+  const fan = fullFan
+    ? { ...fullFan, t: fullFan.t.slice(0, steps), q10: fullFan.q10.slice(0, steps), q25: fullFan.q25.slice(0, steps),
+        q50: fullFan.q50.slice(0, steps), q75: fullFan.q75.slice(0, steps), q90: fullFan.q90.slice(0, steps) }
+    : null;
   const px = focus ? live.prices[focus]?.p ?? m?.mark_price : undefined;
   const chg = focus ? live.prices[focus]?.c ?? m?.change_24h ?? 0 : 0;
 
@@ -86,8 +106,7 @@ export default function App() {
   const sys = live.system;
   const feedOk = sys && Date.now() / 1000 - sys.last_tick < 5;
   const best = detail?.checker;
-  const horizonForTf = tf === "5s" ? "30s" : tf === "1m" ? "15m" : "1h";
-  const hstat = snap?.horizons?.[horizonForTf];
+  const hstat = snap?.horizons?.[horizon];
 
   const realClose = async (p: { id: string; symbol: string }) => {
     await real.closeReal(p.symbol);
@@ -112,7 +131,7 @@ export default function App() {
 
       <main className="desk">
         <aside className="watch">
-          <Watchlist markets={live.markets} ranking={live.ranking} prices={live.prices} focus={focus} onFocus={setFocus} paused={live.paused} pauseReason={live.pauseReason} />
+          <Watchlist markets={live.markets} ranking={live.ranking} prices={live.prices} focus={focus} onFocus={setFocus} paused={live.paused} pauseReason={live.pauseReason} board={live.boards[horizon] ?? null} horizon={horizon} />
         </aside>
 
         <section className="main">
@@ -130,7 +149,7 @@ export default function App() {
                 {hstat && (
                   <div>
                     <div className="last kronos">{price(hstat.price_q50)}</div>
-                    <div className="chg muted">mediana Kronos tra {horizonForTf} · {pct(hstat.p_up)} in rialzo</div>
+                    <div className="chg muted">mediana Kronos tra {horizonName(horizon)} · {pct(hstat.p_up)} in rialzo</div>
                   </div>
                 )}
                 <div className="facts">
@@ -143,10 +162,13 @@ export default function App() {
               <p className="empty">Caricamento dei mercati di Raydium Perps…</p>
             )}
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
-              <div className="tfs" role="group" aria-label="Intervallo candele">
-                {(["5s", "1m", "5m"] as const).map((t) => <button key={t} aria-pressed={tf === t} onClick={() => setTf(t)}>{TF_LABEL[t]}</button>)}
-              </div>
-              {fan ? <span className="note">Cono Kronos su {fmtDur(fan.q50.length * TF_SECONDS[tf])}, aggiornato {Math.round(fan.age)}s fa{fan.source !== "kronos" ? " (stima statistica)" : ""}</span>
+              <label className="hsel">
+                <span>Orizzonte</span>
+                <select value={horizon} onChange={(e) => setHorizon(e.target.value)} aria-label="Orizzonte di previsione">
+                  {HORIZON_CHOICES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+              </label>
+              {fan ? <span className="note">Cono Kronos a {fmtDur(steps * TF_SECONDS[tf])} su {TF_NAME[tf]}, aggiornato {Math.round(fan.age)}s fa{fan.source !== "kronos" ? " (stima statistica)" : ""}</span>
                 : <span className="note">{tf === "5s" ? "Le candele da 5 secondi si formano dai tick live: servono circa 4 minuti dopo l'avvio." : "Previsione in calcolo per questo token."}</span>}
             </div>
             <Chart bars={liveBars} fan={fan} levels={levels} tfSeconds={TF_SECONDS[tf]} />
@@ -160,7 +182,7 @@ export default function App() {
         </section>
 
         <aside className="side">
-          <HorizonLadder snap={snap} />
+          <HorizonLadder snap={snap} selected={horizon} onSelect={setHorizon} />
           <Ticket m={m} snap={snap} ex={live.executor} real={real} onToast={setToast} />
           <WalletPanel real={real} ex={live.executor} />
         </aside>

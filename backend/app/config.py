@@ -67,6 +67,7 @@ settings = Settings()
 # Horizons shown on the dashboard: label -> (seconds, timeframe used, steps on that timeframe)
 TIMEFRAMES = {"5s": 5, "1m": 60, "5m": 300}
 HORIZONS: dict[str, tuple[int, str, int]] = {
+    "5s": (5, "5s", 1),
     "10s": (10, "5s", 2),
     "30s": (30, "5s", 6),
     "1m": (60, "1m", 1),
@@ -76,4 +77,4 @@ HORIZONS: dict[str, tuple[int, str, int]] = {
     "1h": (3600, "5m", 12),
 }
 PRED_LEN = {"5s": 12, "1m": 30, "5m": 12}  # steps sampled per timeframe
-EXPERIMENTAL_HORIZONS = {"10s", "30s"}  # sub-minute: outside Kronos' training resolution
+EXPERIMENTAL_HORIZONS = {"5s", "10s", "30s"}  # sub-minute: outside Kronos' training resolution

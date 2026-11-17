@@ -1,49 +1,58 @@
 import { useMemo, useState } from "react";
-import type { AnalystView, CheckerRow, ExecutorView, HorizonStat, LogEntry, Market, Position, Report, Snapshot } from "../api";
+import type { AnalystView, Board, CheckerRow, ExecutorView, HorizonStat, LogEntry, Market, Position, Report, Snapshot } from "../api";
 import { ago, pct, postJSON, price, signed, usd } from "../api";
 
-const HORIZON_ORDER = ["10s", "30s", "1m", "5m", "15m", "30m", "1h"];
+const HORIZON_ORDER = ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h"];
+export const HORIZON_CHOICES: [string, string][] = [
+  ["5s", "5 secondi"], ["10s", "10 secondi"], ["30s", "30 secondi"], ["1m", "1 minuto"],
+  ["15m", "15 minuti"], ["30m", "30 minuti"], ["1h", "1 ora"],
+];
+export const horizonName = (h: string) => HORIZON_CHOICES.find(([k]) => k === h)?.[1] ?? h;
 
 // ------------------------------------------------------------------ watchlist (Checker ranking)
-export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pauseReason }: {
+export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pauseReason, board, horizon }: {
   markets: Market[]; ranking: CheckerRow[]; prices: Record<string, { p: number; c: number }>; focus: string | null;
-  onFocus: (s: string) => void; paused: boolean; pauseReason: string;
+  onFocus: (s: string) => void; paused: boolean; pauseReason: string; board: Board | null; horizon: string;
 }) {
   const [q, setQ] = useState("");
   const byRank = useMemo(() => new Map(ranking.map((r) => [r.symbol, r])), [ranking]);
+  const probs = board && board.h === horizon ? board.rows : {};
+  const ready = Object.keys(probs).length;
   const rows = useMemo(() => {
-    const scored = ranking.map((r) => r.symbol);
-    const rest = markets.filter((m) => !byRank.has(m.symbol)).map((m) => m.symbol);
-    const all = [...scored, ...rest];
     const ql = q.trim().toLowerCase();
-    const mk = new Map(markets.map((m) => [m.symbol, m]));
-    return all
-      .map((s) => ({ s, m: mk.get(s), r: byRank.get(s) }))
-      .filter((x) => x.m && (!ql || x.m.base.toLowerCase().includes(ql) || x.m.name.toLowerCase().includes(ql)));
-  }, [markets, ranking, byRank, q]);
+    return markets
+      .map((m) => ({ s: m.symbol, m, r: byRank.get(m.symbol), b: probs[m.symbol] }))
+      .filter((x) => !ql || x.m.base.toLowerCase().includes(ql) || x.m.name.toLowerCase().includes(ql))
+      // highest directional probability first; tokens still being computed go last, by market cap
+      .sort((a, b) => (b.b?.conf ?? -1) - (a.b?.conf ?? -1) || a.m.rank - b.m.rank);
+  }, [markets, byRank, probs, q]);
 
   return (
     <div className="panel">
-      <h2>Checker <small>{ranking.length ? `${ranking.length} token analizzati` : "in attesa delle prime previsioni"}</small></h2>
+      <h2>
+        Token <small>{ready ? `ordinati per probabilità a ${horizonName(horizon)}` : `calcolo le probabilità a ${horizonName(horizon)}…`}</small>
+      </h2>
+      {ready > 0 && ready < markets.length && <p className="note" style={{ padding: "0 8px", margin: "0 0 6px" }}>{ready} di {markets.length} token già calcolati, gli altri arrivano a breve.</p>}
       {paused && <p className="note warn" style={{ padding: "0 8px" }}>Nuove aperture sospese: {pauseReason}</p>}
       <input className="search" placeholder="Cerca token" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Cerca token" />
       <ul className="wl">
-        {rows.map(({ s, m, r }) => {
-          const p = prices[s]?.p ?? m!.mark_price;
-          const c = prices[s]?.c ?? m!.change_24h;
+        {rows.map(({ s, m, r, b }) => {
+          const p = prices[s]?.p ?? m.mark_price;
           return (
             <li key={s}>
               <button aria-current={focus === s} onClick={() => onFocus(s)}>
                 <span className="name">
-                  {m!.base}
-                  {r && <span className={`side-tag ${r.side}`}>{r.side === "long" ? "Long" : "Short"} {r.leverage}x</span>}
-                  {r?.eligible && <span className="go" title="Segnale valido per l'Executor" />}
+                  {m.base}
+                  {r?.eligible && <span className="go" title={`Segnale valido per l'Executor: ${r.side} ${r.leverage}x`} />}
                 </span>
-                <span className="px">{price(p)}</span>
+                <span className={`prob ${b ? (b.dir === "up" ? "long" : "short") : "faint"}`}>
+                  {b ? <>{b.dir === "up" ? "▲" : "▼"} {pct(b.conf)}</> : "–"}
+                </span>
                 <span className="meta">
-                  {r ? <>Kronos {pct(r.kronos_p_tp)} · rischio {pct(r.extra_risk)}</> : <>#{m!.rank} · in coda</>}
+                  {price(p)}
+                  {r && <span className={`side-tag ${r.side}`} title={`Checker: TP ${pct(r.kronos_p_tp)}, rischio ${pct(r.extra_risk)}`}>{r.side === "long" ? "Long" : "Short"} {r.leverage}x</span>}
                 </span>
-                <span className={`score ${c >= 0 ? "long" : "short"}`}>{signed(c, 1)}%</span>
+                <span className="score">{b ? (b.dir === "up" ? "rialzo" : "ribasso") : "in calcolo"}</span>
               </button>
             </li>
           );
@@ -55,7 +64,7 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
 }
 
 // ------------------------------------------------------------------ horizon ladder (signature)
-export function HorizonLadder({ snap }: { snap: Snapshot | undefined }) {
+export function HorizonLadder({ snap, selected, onSelect }: { snap: Snapshot | undefined; selected: string; onSelect: (h: string) => void }) {
   return (
     <div className="panel">
       <h2>Previsione Kronos <small>probabilità che il prezzo sia più alto</small></h2>
@@ -64,18 +73,20 @@ export function HorizonLadder({ snap }: { snap: Snapshot | undefined }) {
           const s: HorizonStat | null | undefined = snap?.horizons?.[h];
           if (!s) {
             return (
-              <div key={h} className="rung pending">
+              <div key={h} className={`rung pending ${h === selected ? "sel" : ""}`}>
                 <span className="h">{h}</span>
                 <div className="bar" style={{ background: "var(--line-soft)" }} />
                 <span className="p">–</span>
-                <span className="sub"><span>{h === "10s" || h === "30s" ? "raccolgo i tick live" : "calcolo in corso"}</span></span>
+                <span className="sub"><span>{h.endsWith("s") ? "raccolgo i tick live" : "calcolo in corso"}</span></span>
               </div>
             );
           }
           const up = s.p_up;
           return (
-            <div key={h} className="rung" title={`Kronos: ${s.source}. Aggiornata ${Math.round(s.age)}s fa`}>
-              <span className="h">{h}</span>
+            <div key={h} className={`rung ${h === selected ? "sel" : ""}`} title={`Kronos: ${s.source}. Aggiornata ${Math.round(s.age)}s fa`}>
+              {HORIZON_CHOICES.some(([k]) => k === h)
+                ? <button className="h hbtn" onClick={() => onSelect(h)} aria-pressed={h === selected} title={`Ordina i token e mostra il grafico a ${horizonName(h)}`}>{h}</button>
+                : <span className="h">{h}</span>}
               <div className="bar" role="img" aria-label={`${pct(up)} rialzo, ${pct(1 - up)} ribasso`}>
                 <div className="up" style={{ width: `${up * 100}%` }} />
                 <div className="mid" />
