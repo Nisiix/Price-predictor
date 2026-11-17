@@ -113,7 +113,7 @@ export function useRealTrading(executor: ExecutorView | null, markets: Market[])
         const p = await client.positions();
         if (!alive) return;
         setVenue(p);
-        postJSON("/api/real/positions", { rows: p.rows }).catch(() => {});
+        postJSON("/api/real/positions", { rows: p.rows, equity: p.total_collateral_value }).catch(() => {});
         // attach TP/SL to limit orders that have filled
         const pend = readPending();
         let changed = false;

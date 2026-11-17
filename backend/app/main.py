@@ -257,11 +257,12 @@ def real_ack(a: Ack):
 
 class VenuePositions(BaseModel):
     rows: list[dict]
+    equity: float | None = None
 
 
 @app.post("/api/real/positions")
 def real_positions(v: VenuePositions):
-    executor.reconcile_real(v.rows)
+    executor.reconcile_real(v.rows, v.equity)
     return {"ok": True}
 
 

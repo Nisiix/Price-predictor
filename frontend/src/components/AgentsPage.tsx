@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import type { AnalystView, Headline, LiveState, LogEntry, Position, Report, Snapshot } from "../api";
-import { ago, pct, signed } from "../api";
+import type { AnalystView, Headline, LiveState, LogEntry, PaperCapital, Position, Report, Snapshot } from "../api";
+import { ago, pct, signed, usd } from "../api";
 import { CheckerTable, HORIZON_CHOICES, Positions, Verdict } from "./Panels";
 import "./agents.css";
 
@@ -23,6 +23,8 @@ export function AgentsPage({ live, focus, onFocus, snap, onToast, realClose }: P
   return (
     <main className="ag">
       <Flow live={live} />
+      {/* test capital: only while no real wallet is connected */}
+      {live.executor && !live.executor.wallet && live.executor.paper && <TestCapital c={live.executor.paper} />}
       <div className="ag-row ag-now">
         <section id="ag-executor" className="ag-sec">
           <Positions ex={live.executor} onToast={onToast} realClose={realClose} />
@@ -68,7 +70,7 @@ function Flow({ live }: { live: LiveState }) {
     {
       id: "ag-executor", name: "Executor",
       tone: !ex ? "idle" : ex.positions.length ? (openPnl >= 0 ? "ok" : "neg") : "idle",
-      main: ex ? `${ex.positions.length} di ${ex.max_positions} posizioni` : "Connessione…",
+      main: ex ? (ex.max_positions ? `${ex.positions.length} di ${ex.max_positions} posizioni` : `${ex.positions.length} posizioni aperte`) : "Connessione…",
       sub: ex ? (ex.positions.length ? `${signed(openPnl)} USDC aperti` : ex.auto ? "in attesa di segnali" : "apertura automatica spenta") : "",
     },
     {
@@ -95,6 +97,51 @@ function Flow({ live }: { live: LiveState }) {
         ))}
       </ol>
     </nav>
+  );
+}
+
+// ------------------------------------------------------------------ test capital (simulation only)
+function TestCapital({ c }: { c: PaperCapital }) {
+  const tone = c.pnl >= 0 ? "long" : "short";
+  const pts = c.history;
+  let spark: string | null = null;
+  let base = 0;
+  if (pts.length > 1) {
+    const W = 260, H = 48;
+    const t0 = pts[0][0], t1 = pts[pts.length - 1][0] || t0 + 1;
+    const vals = pts.map((p) => p[1]);
+    const lo = Math.min(...vals, c.start), hi = Math.max(...vals, c.start);
+    const y = (v: number) => H - 4 - ((v - lo) / (hi - lo || 1)) * (H - 8);
+    spark = pts.map((p) => `${((p[0] - t0) / (t1 - t0 || 1)) * W},${y(p[1])}`).join(" ");
+    base = y(c.start);
+  }
+  return (
+    <section className="ag-sec">
+      <div className="panel capital">
+        <h2>Capitale di test <small>simulazione dall'avvio del motore alle {new Date(c.since * 1000).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })}, visibile finché non colleghi un wallet</small></h2>
+        <div className="capital-grid">
+          <div className="cap-main">
+            <span className="muted">Valore attuale</span>
+            <b className="cap-eq">{usd(c.equity)}</b>
+            <span className={`cap-pnl ${tone}`}>{signed(c.pnl)} USDC · {signed(c.pnl_pct, 2)}%</span>
+            <span className="faint">partenza {usd(c.start)}</span>
+          </div>
+          <dl className="cap-parts">
+            <div><dt>Operazioni chiuse</dt><dd className={c.realized >= 0 ? "long" : "short"}>{signed(c.realized)} USDC</dd></div>
+            <div><dt>Posizioni aperte ({c.open})</dt><dd className={c.unrealized >= 0 ? "long" : "short"}>{signed(c.unrealized)} USDC</dd></div>
+            <div><dt>Margine impegnato</dt><dd>{usd(c.margin_used)}</dd></div>
+            <div><dt>Esposizione</dt><dd>{usd(c.exposure)}</dd></div>
+            <div><dt>Liquidazione più vicina</dt><dd>{c.min_liq_distance != null ? `${pct(c.min_liq_distance)} dall'entrata` : "–"}</dd></div>
+          </dl>
+          {spark && (
+            <svg className="cap-spark" viewBox="0 0 260 48" preserveAspectRatio="none" role="img" aria-label="Andamento del capitale di test">
+              <line x1={0} x2={260} y1={base} y2={base} stroke="var(--line)" strokeDasharray="3 3" />
+              <polyline points={spark} fill="none" stroke={c.pnl >= 0 ? "var(--long)" : "var(--short)"} strokeWidth={1.8} />
+            </svg>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 

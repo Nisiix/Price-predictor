@@ -103,7 +103,7 @@ export function Ticket({ m, snap, ex, real, onToast }: { m: Market | undefined; 
 export function WalletPanel({ real, ex }: { real: Real; ex: ExecutorView | null }) {
   const toggleAuto = async (on: boolean) => {
     if (on && !window.confirm(
-      `Attivi il trading automatico REALE?\n\nL'Executor aprirà fino a ${ex?.max_positions ?? 2} posizioni da ${ex?.margin_usdc ?? 100} USDC con leva 10x-20x sui segnali del Checker, firmandole con la chiave delegata, e le chiuderà secondo le regole. Puoi spegnerlo in qualsiasi momento.`,
+      `Attivi il trading automatico REALE?\n\nL'Executor aprirà posizioni fino a ${ex?.margin_usdc ?? 100} USDC ciascuna con leva 10x-20x sui segnali del Checker, finché la liquidazione di ognuna resta ad almeno il ${Math.round((ex?.liq_min_distance ?? 0.5) * 100)}% dall'entrata, firmandole con la chiave delegata, e le chiuderà secondo le regole. Puoi spegnerlo in qualsiasi momento.`,
     )) return;
     await postJSON("/api/executor", { real_auto: on });
   };

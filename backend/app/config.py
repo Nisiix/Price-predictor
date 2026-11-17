@@ -47,8 +47,12 @@ class Settings:
     leverage_choices: tuple[int, ...] = (10, 12, 15, 20)
     take_profit_pct: float = _f("PP_TP_PCT", 5.0)  # leveraged move, % of margin
     stop_loss_pct: float = _f("PP_SL_PCT", 2.0)  # leveraged move, % of margin
-    margin_usdc: float = _f("PP_MARGIN_USDC", 100.0)
-    max_positions: int = _i("PP_MAX_POSITIONS", 2)
+    margin_usdc: float = _f("PP_MARGIN_USDC", 100.0)  # maximum margin per trade (sizing may use less)
+    # cross-margin sizing (user rule): every position's liquidation price must stay at least this far from its
+    # entry (0.5 = a long liquidates only below half its entry price, a short only above 1.5x)
+    liq_min_distance: float = _f("PP_LIQ_DISTANCE", 0.5)
+    min_margin_usdc: float = _f("PP_MIN_MARGIN", 10.0)
+    max_positions: int = _i("PP_MAX_POSITIONS", 0)  # 0 = no fixed cap: the liquidation-distance rule is the limit
     paper_start_balance: float = _f("PP_PAPER_BALANCE", 1000.0)
     taker_fee: float = _f("PP_TAKER_FEE", 0.0006)  # per side, on notional
     slippage: float = _f("PP_SLIPPAGE", 0.0002)  # per side, on price

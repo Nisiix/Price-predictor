@@ -108,6 +108,11 @@ class Executor:
         self.intents: dict[str, dict] = {}
         self.cooldown: dict[str, float] = {}
         self.predictor = None  # set by main, to prioritise open positions
+        self.venue_equity: float | None = None  # real account collateral (reported by the browser)
+        self.paper_started = time.time()
+        self.equity_hist: list[tuple[float, float]] = []  # (ts, paper equity) every 30 s, last 12 h
+        self._last_hist = 0.0
+        self.venue_rows: list[dict] = []
 
     # ------------------------------------------------------------- helpers
     @property
@@ -129,6 +134,87 @@ class Executor:
         p.pnl = gross * p.notional - p.fees - exit_fee - p.funding
         p.roe = p.pnl / p.margin * 100
 
+    # ------------------------------------------------------------- cross margin
+    def equity(self) -> float:
+        """Account value backing every position (cross margin)."""
+        if self.mode == "real" and self.venue_equity is not None:
+            return self.venue_equity
+        return self.balance + sum(p.margin + p.pnl + p.notional * settings.taker_fee
+                                  for p in self.open_positions() if p.mode == "paper")
+
+    def paper_equity(self) -> float:
+        return self.balance + sum(p.margin + p.pnl + p.notional * settings.taker_fee
+                                  for p in self.open_positions() if p.mode == "paper")
+
+    def paper_view(self) -> dict:
+        """Test capital: realized result of closed trades + open (unrealized) result, since the engine started."""
+        paper = [p for p in self.open_positions() if p.mode == "paper"]
+        start = settings.paper_start_balance
+        equity = self.paper_equity()
+        realized = self.balance + sum(p.margin + p.notional * settings.taker_fee for p in paper) - start
+        unrealized = sum(p.pnl for p in paper)
+        liq_dist = [abs(p.liq / p.entry - 1) for p in paper if p.liq and p.entry]
+        return {
+            "start": start, "equity": equity, "pnl": equity - start, "pnl_pct": (equity / start - 1) * 100 if start else 0.0,
+            "realized": realized, "unrealized": unrealized, "exposure": sum(p.qty * (p.last_price or p.entry) for p in paper),
+            "margin_used": sum(p.margin for p in paper), "open": len(paper), "since": self.paper_started,
+            "min_liq_distance": min(liq_dist) if liq_dist else None,
+            "history": [[round(t), round(e, 4)] for t, e in self.equity_hist[::4]] + ([[round(time.time()), round(equity, 4)]]),
+        }
+
+    def _exposures(self) -> list[tuple[float, float]]:
+        """(notional, maintenance rate) of every open position, from the venue in real mode."""
+        if self.mode == "real" and self.venue_equity is not None:
+            out = []
+            for r in self.venue_rows:
+                q = abs(float(r.get("position_qty") or 0))
+                if q:
+                    m = self.feed.markets.get(r.get("symbol"))
+                    out.append((q * float(r.get("mark_price") or 0), m.mmr if m else 0.05))
+            return out
+        out = []
+        for p in self.open_positions():
+            m = self.feed.markets.get(p.symbol)
+            out.append((p.qty * (p.last_price or p.entry), m.mmr if m else 0.05))
+        return out
+
+    def size_margin(self, sym: str, leverage: float, side: int = 1) -> tuple[float, str]:
+        """Largest margin (<= margin_usdc) such that, even if every open position and the new one moved
+        `liq_min_distance` against us at the same time, the account would still be above maintenance:
+        sum(N_j * (d + mmr_j)) + N_new * (d + mmr_new) <= equity. That keeps each liquidation price at
+        least d (50%) away from its entry."""
+        if side < 0:
+            # user rule: the liquidation-distance sizing applies to longs only; shorts use the fixed margin
+            # as long as the account has that much free collateral left
+            used = sum(p.margin for p in self.open_positions())
+            free = self.equity() - used
+            if free < settings.margin_usdc:
+                return 0.0, f"collaterale libero insufficiente ({free:.2f} USDC) per uno short da {settings.margin_usdc:g} USDC"
+            return settings.margin_usdc, ""
+        d = settings.liq_min_distance
+        c = 2 * (settings.taker_fee + settings.slippage) + 0.001  # entry/exit costs and a small buffer
+        mmr = self.feed.markets[sym].mmr
+        room = self.equity() - sum(n * (d + r + c) for n, r in self._exposures())
+        notional = max(0.0, room / (d + mmr + c))
+        margin = min(settings.margin_usdc, notional / leverage)
+        if margin < settings.min_margin_usdc:
+            return 0.0, f"capitale insufficiente per tenere la liquidazione al {d * 100:.0f}% dall'entrata"
+        return margin, ""
+
+    def cross_liq(self, p: Position) -> float:
+        """Liquidation price of `p` with the other positions at their current price (cross margin)."""
+        if not p.qty:
+            return 0.0
+        price = p.last_price or p.entry
+        m = self.feed.markets.get(p.symbol)
+        mmr = m.mmr if m else 0.05
+        own = p.qty * price * mmr
+        mm_others = sum(n * r for n, r in self._exposures()) - own
+        # solve equity(P) = maintenance(P): E + s*q*(P - Pn) = mm_others + mmr*q*P
+        free = self.equity() - mm_others
+        liq = (p.side * p.qty * price - free) / (p.qty * (p.side - mmr))
+        return max(liq, 0.0)
+
     # ------------------------------------------------------------- opening
     def _make_position(self, sym, side, lev, margin, price, origin, signal=None, tp=None, sl=None, mode="paper") -> Position:
         m = self.feed.markets[sym]
@@ -146,9 +232,9 @@ class Executor:
 
     def can_open(self) -> tuple[bool, str]:
         opening = sum(1 for i in self.intents.values() if i["action"] == "open")
-        if len(self.open_positions()) + opening >= settings.max_positions:
+        if settings.max_positions and len(self.open_positions()) + opening >= settings.max_positions:
             return False, f"già {settings.max_positions} posizioni aperte"
-        if self.mode == "paper" and self.balance < settings.margin_usdc:
+        if self.mode == "paper" and self.balance < settings.min_margin_usdc:
             return False, "saldo simulato insufficiente"
         return True, ""
 
@@ -164,20 +250,27 @@ class Executor:
         snapshot["rsi"] = sig["indicators"]["rsi"]
         snapshot["analog_win"] = sig.get("analog_dir")
         snapshot["macro_risk"] = self.checker.macro_risk
-        if self.mode == "real":
-            await self._real_open(sym, side, sig["leverage"], settings.margin_usdc, price, "executor", snapshot)
+        margin, why = self.size_margin(sym, sig["leverage"], side)
+        if not margin:
+            self.cooldown[sym] = time.time() + 600
+            self.bus.agent_log("Executor", f"{sig['base']}: apertura saltata, {why}", "warn")
             return
-        p = self._make_position(sym, side, sig["leverage"], settings.margin_usdc, price, "executor", snapshot)
+        snapshot["margin_sized"] = margin
+        if self.mode == "real":
+            await self._real_open(sym, side, sig["leverage"], margin, price, "executor", snapshot)
+            return
+        p = self._make_position(sym, side, sig["leverage"], margin, price, "executor", snapshot)
         if not settings.use_take_profit:
             p.tp = 0.0  # exit on forecast reversal instead
         p.p_dir_now = sig.get("conf_4h")
         self.balance -= p.margin + p.fees
         self.positions[p.id] = p
+        p.liq = self.cross_liq(p)
         where = "minimo" if side > 0 else "massimo"
         self.bus.agent_log(
             "Executor",
-            f"Aperta {'LONG' if side > 0 else 'SHORT'} simulata su {p.base} {p.leverage:.0f}x a {p.entry:.6g} vicino al {where} "
-            f"delle 4 ore (SL {p.sl:.6g}, liq {p.liq:.6g}); Kronos 4h {(sig.get('conf_4h') or 0) * 100:.0f}% "
+            f"Aperta {'LONG' if side > 0 else 'SHORT'} simulata su {p.base} {p.leverage:.0f}x, margine {p.margin:.2f} USDC, a {p.entry:.6g} "
+            f"vicino al {where} delle 4 ore (liquidazione {p.liq:.6g}, {abs(p.liq / p.entry - 1) * 100:.0f}% dall'entrata); Kronos 4h {(sig.get('conf_4h') or 0) * 100:.0f}% "
             f"{'in rialzo' if side > 0 else 'in ribasso'}, rischio aggiuntivo {sig['extra_risk'] * 100:.0f}%", "success",
         )
 
@@ -221,18 +314,15 @@ class Executor:
         self._finalize(p, exit_price, reason)
 
     def _finalize(self, p: Position, exit_price: float, reason: str) -> None:
-        if reason.startswith("liquidazione"):
-            p.pnl = -p.margin - p.fees
-        else:
-            gross = p.side * (exit_price / p.entry - 1)
-            p.fees += p.notional * settings.taker_fee
-            p.pnl = gross * p.notional - p.fees - p.funding
+        gross = p.side * (exit_price / p.entry - 1)
+        p.fees += p.notional * settings.taker_fee
+        p.pnl = gross * p.notional - p.fees - p.funding
         p.lev_move = p.side * (exit_price / p.entry - 1) * p.leverage * 100
         p.roe = p.pnl / p.margin * 100
         p.exit, p.exit_ts, p.reason, p.status = exit_price, time.time(), reason, "closed"
         if p.mode == "paper":
             entry_fee = p.notional * settings.taker_fee  # already taken from the balance at open
-            self.balance += max(0.0, p.margin + p.pnl + entry_fee)
+            self.balance += p.margin + p.pnl + entry_fee  # cross margin: a loss can exceed the position margin
         self.cooldown[p.symbol] = time.time() + 300
         self.controller.record_trade(p)
         lvl = "success" if p.pnl > 0 else "danger"
@@ -248,6 +338,8 @@ class Executor:
         if m and m.funding_rate and p.mode == "paper":
             p.funding += p.side * p.notional * m.funding_rate * dt / (m.funding_period_h * 3600)
         self._mark(p, price)
+        if p.mode == "paper":
+            p.liq = self.cross_liq(p)
         p.peak_lev_move = max(p.peak_lev_move, p.lev_move)
         if (p.side > 0 and price <= p.liq) or (p.side < 0 and price >= p.liq):
             return "liquidazione"
@@ -341,6 +433,10 @@ class Executor:
                             self.bus.agent_log("Executor", f"Ordine limite eseguito su {p.base} a {o.limit:.6g}", "success")
                 await self._maybe_open()
                 self._expire_intents()
+                if time.time() - self._last_hist >= 30:
+                    self._last_hist = time.time()
+                    self.equity_hist.append((self._last_hist, self.paper_equity()))
+                    self.equity_hist = self.equity_hist[-1440:]
                 if self.predictor is not None:
                     self.predictor.priority = {p.symbol for p in self.open_positions()}
                 self.bus.publish("executor", self.view())
@@ -437,8 +533,15 @@ class Executor:
                 self._finalize(p, fill_price or self._price(p.symbol) or p.last_price, p.reason or intent.get("reason", "chiusura"))
         return {"ok": True}
 
-    def reconcile_real(self, venue_positions: list[dict]) -> None:
+    def reconcile_real(self, venue_positions: list[dict], equity: float | None = None) -> None:
         """Browser snapshot of Orderly positions: anything we track that vanished was closed by the venue."""
+        self.venue_rows = venue_positions
+        if equity is not None:
+            self.venue_equity = equity
+        for row in venue_positions:
+            for p in self.open_positions():
+                if p.mode == "real" and p.symbol == row.get("symbol") and row.get("est_liq_price"):
+                    p.liq = float(row["est_liq_price"])
         live = {row["symbol"] for row in venue_positions if abs(float(row.get("position_qty", 0))) > 0}
         for p in list(self.open_positions()):
             if p.mode != "real" or p.symbol in live or time.time() - p.opened_ts < 15:
@@ -477,6 +580,7 @@ class Executor:
             "use_tp": settings.use_take_profit, "exit_margin": settings.exit_margin,
             "exit_confirmations": settings.exit_confirmations, "entry_zone": settings.entry_zone,
             "lock_trigger_pct": settings.lock_trigger_pct, "lock_profit_pct": settings.lock_profit_pct,
+            "liq_min_distance": settings.liq_min_distance, "equity_now": self.equity(), "paper": self.paper_view(),
             "use_initial_stop": settings.use_initial_stop, "recovery_hours": settings.recovery_hours,
             "recovery_min_prob": settings.recovery_min_prob,
         }

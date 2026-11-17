@@ -315,8 +315,9 @@ export function Positions({ ex, onToast, realClose }: { ex: ExecutorView | null;
       </h2>
       <div className="balance">
         {ex.mode === "paper" && <div><span>Saldo simulato</span><b>{usd(ex.equity)}</b></div>}
-        <div><span>Posizioni</span><b>{ex.positions.length} / {ex.max_positions}</b></div>
-        <div><span>Per operazione</span><b>{ex.margin_usdc} USDC</b></div>
+        <div><span>Posizioni</span><b>{ex.max_positions ? `${ex.positions.length} / ${ex.max_positions}` : ex.positions.length}</b></div>
+        <div><span>Per operazione</span><b>fino a {ex.margin_usdc} USDC</b></div>
+        <div title="L'importo di ogni apertura è calcolato perché la liquidazione di tutte le posizioni resti almeno a questa distanza dall'entrata"><span>Limite long</span><b>liquidazione a ≥{Math.round(ex.liq_min_distance * 100)}% dall'entrata</b></div>
         <div><span>Chiusura</span><b style={{ fontSize: 14 }}>{ex.use_tp ? `TP +${ex.tp_pct}% · ` : "inversione 4 ore · "}{ex.use_initial_stop ? `SL −${ex.sl_pct}%` : `niente stop in perdita, dopo ${ex.recovery_hours} h esce se il recupero è sotto il ${Math.round(ex.recovery_min_prob * 100)}%`} · da +{ex.lock_trigger_pct}% protegge +{ex.lock_profit_pct}% (con leva)</b></div>
         <label className="switch" style={{ marginLeft: "auto" }}>
           <input type="checkbox" checked={ex.auto} onChange={toggleAuto} /> Apertura automatica

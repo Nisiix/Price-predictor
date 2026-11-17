@@ -105,7 +105,7 @@ def make(price=100.0):
 
 
 def open_long(ex, lev=10):
-    sig = {"symbol": "PERP_SOL_USDC", "side": "long", "leverage": lev, "kronos_p_tp": 0.6, "extra_risk": 0.2,
+    sig = {"symbol": "PERP_SOL_USDC", "base": "SOL", "side": "long", "leverage": lev, "kronos_p_tp": 0.6, "extra_risk": 0.2,
            "conf_4h": 0.7, "p_up_4h": 0.7, "analog_dir": 0.6,
            "indicators": {"regime": "laterale", "rsi": 55}, "analogs": {"long_win": 0.5}}
     asyncio.run(ex.open_from_signal(sig))
@@ -143,12 +143,13 @@ def test_stop_loss_at_minus_2_leveraged(monkeypatch):
     assert ctl.trades[-1].pnl < 0
 
 
-def test_liquidation_on_gap():
+def test_liquidation_is_cross_margin_and_far():
     feed, ctl, ex = make()
     p = open_long(ex, lev=20)
+    assert p.liq <= p.entry * 0.5 + 1e-9  # liquidation at least 50% below the entry
     r = step(ex, feed, p.liq * 0.99)
     assert r == "liquidazione"
-    assert ctl.trades[-1].pnl == pytest.approx(-p.margin - p.fees)
+    assert ctl.trades[-1].pnl < -p.margin  # cross margin: the account absorbs the loss
 
 
 def test_analyst_close_all_and_balance_accounting():
@@ -163,12 +164,31 @@ def test_analyst_close_all_and_balance_accounting():
     assert ex.balance == pytest.approx(start + t.pnl)
 
 
-def test_max_two_positions():
+def test_position_cap_is_optional(monkeypatch):
     feed, ctl, ex = make()
     open_long(ex)
     ex.positions["X"] = ex.positions[next(iter(ex.positions))].__class__(**{**ex.open_positions()[0].__dict__, "id": "X"})
-    ok, why = ex.can_open()
-    assert settings.max_positions == 2 and not ok
+    assert settings.max_positions == 0 and ex.can_open()[0]  # default: no fixed cap
+    monkeypatch.setattr(settings, "max_positions", 2)
+    assert not ex.can_open()[0]
+
+
+def test_opens_until_the_liquidation_rule_would_break():
+    feed, ctl, ex = make()
+    margins = []
+    for i in range(30):
+        sym = f"PERP_T{i}_USDC"
+        feed.markets[sym] = Market(sym, f"T{i}", f"T{i}", 3, 20, 0.05, 0.025, 0.01, 0.01, 0.001, 10, mark_price=10.0)
+        sig = {"symbol": sym, "base": f"T{i}", "side": "long", "leverage": 10, "kronos_p_tp": 0.7, "extra_risk": 0.3,
+               "conf_4h": 0.75, "indicators": {"regime": "laterale", "rsi": 50}, "analogs": {}}
+        n = len(ex.open_positions())
+        asyncio.run(ex.open_from_signal(sig))
+        if len(ex.open_positions()) == n:
+            break
+        margins.append(ex.open_positions()[-1].margin)
+    assert 1 < len(margins) < 30  # several positions, then it stops by itself
+    for q in ex.open_positions():
+        assert abs(ex.cross_liq(q) / q.entry - 1) >= 0.5 - 1e-6
 
 
 def test_no_take_profit_by_default_and_reversal_exit():
@@ -231,3 +251,21 @@ def test_no_loss_stop_by_default_recovery_check_after_hours():
     r = ex._recovery(p, cache(p.entry * 0.995))
     assert r and r.startswith("nessun recupero") and p.recovery_prob == 0
     assert ex._recovery(p, cache(p.entry * 1.01)) is None  # projection recovers -> keep
+
+
+def test_sizing_keeps_every_liquidation_half_the_entry_away():
+    feed, ctl, ex = make()
+    p1 = open_long(ex, lev=20)
+    assert p1.margin < settings.margin_usdc  # 100 USDC at 20x would put liquidation too close on 1000 USDC
+    # second position on another market
+    feed.markets["PERP_ETH_USDC"] = Market("PERP_ETH_USDC", "ETH", "Ethereum", 2, 20, 0.05, 0.025, 0.01, 0.01, 0.001, 10,
+                                           mark_price=2000.0)
+    sig = {"symbol": "PERP_ETH_USDC", "base": "ETH", "side": "short", "leverage": 20, "kronos_p_tp": 0.7, "extra_risk": 0.3,
+           "conf_4h": 0.75, "indicators": {"regime": "laterale", "rsi": 50}, "analogs": {}}
+    asyncio.run(ex.open_from_signal(sig))
+    ps = ex.open_positions()
+    short = [q for q in ps if q.side < 0][0]
+    assert short.margin == settings.margin_usdc  # shorts: fixed margin, no liquidation-distance sizing
+    for q in ps:
+        q.liq = ex.cross_liq(q)
+    assert p1.liq <= p1.entry * 0.5 * 1.05  # the long stays far from liquidation (within the short's extra load)
