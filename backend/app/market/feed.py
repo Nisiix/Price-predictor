@@ -71,6 +71,7 @@ class MarketFeed:
         self.errors = 0
         self._client = httpx.AsyncClient(timeout=15, headers={"User-Agent": "price-predictor/1.0"})
         self._history_ready: set[str] = set()
+        self._history_lock = asyncio.Lock()
 
     # ---------------------------------------------------------------- helpers
     async def _get(self, url: str, **params) -> dict:
@@ -185,19 +186,38 @@ class MarketFeed:
                 self.status = f"tick error: {type(exc).__name__}"
             await asyncio.sleep(max(0.05, settings.tick_interval_s - (time.time() - t0)))
 
+    async def _try_history(self, sym: str, tf: str) -> bool:
+        async with self._history_lock:
+            try:
+                await self.load_history(sym, tf)
+                ok = f"{sym}:{tf}" in self._history_ready and self.store.count(sym, tf) > 1
+            except httpx.HTTPStatusError as exc:
+                ok = False
+                if exc.response.status_code == 429:
+                    await asyncio.sleep(5)  # rate limited: back off
+            except Exception as exc:
+                ok = False
+                log.debug("history %s %s failed: %s", sym, tf, exc)
+            await asyncio.sleep(0.8)  # stay inside Orderly's public rate limit
+            return ok
+
+    async def ensure_history(self, sym: str) -> None:
+        """Load a token's candles right away (e.g. when it is opened on the dashboard)."""
+        for tf in ("1m", "5m"):
+            if f"{sym}:{tf}" not in self._history_ready or self.store.count(sym, tf) < 2:
+                await self._try_history(sym, tf)
+
     async def _history_loop(self) -> None:
-        """Backfill every market, then refresh closed bars (with volume) every few minutes."""
+        """Backfill every market (retrying what the rate limit rejected), then refresh closed bars every few minutes."""
         while True:
-            for sym in list(self.markets):
-                for tf in ("1m", "5m"):
-                    try:
-                        await self.load_history(sym, tf)
-                    except httpx.HTTPStatusError as exc:
-                        if exc.response.status_code == 429:
-                            await asyncio.sleep(5)  # rate limited: back off
-                    except Exception as exc:
-                        log.debug("history %s %s failed: %s", sym, tf, exc)
-                    await asyncio.sleep(0.7)  # stay inside Orderly's public rate limit
+            pending = [(s, tf) for s in list(self.markets) for tf in ("1m", "5m")]
+            for attempt in range(8):
+                failed = [(s, tf) for s, tf in pending if not await self._try_history(s, tf)]
+                if not failed:
+                    break
+                log.info("history: %d series rejected, retrying", len(failed))
+                pending = failed
+                await asyncio.sleep(10 * (attempt + 1))
             await asyncio.sleep(180)
 
     async def _universe_loop(self) -> None:

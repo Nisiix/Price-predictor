@@ -140,13 +140,48 @@ export function HorizonLadder({ snap, selected, onSelect }: { snap: Snapshot | u
   );
 }
 
+// ------------------------------------------------------------------ checker ranking (Agenti page)
+export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
+  ranking: CheckerRow[]; focus: string | null; onFocus: (s: string) => void; paused: boolean; pauseReason: string;
+}) {
+  return (
+    <div className="panel">
+      <h2>Checker <small>{ranking.length ? `${ranking.length} token valutati per long e short da 10x a 20x` : "in attesa delle prime previsioni"}</small></h2>
+      {paused && <p className="note warn">Nuove aperture sospese dall'Analyst: {pauseReason}</p>}
+      {ranking.length === 0 ? <p className="empty">Il Checker pubblica la classifica dopo la prima scansione di Kronos.</p> : (
+        <div className="scroll" style={{ maxHeight: 360, overflowY: "auto" }}>
+          <table className="t">
+            <thead>
+              <tr><th>Token</th><th>Setup</th><th className="n">Kronos TP</th><th className="n">Pattern</th><th className="n">Rischio</th><th className="n">Punteggio</th><th>Esito</th></tr>
+            </thead>
+            <tbody>
+              {ranking.map((r) => (
+                <tr key={r.symbol} className={`clickable ${focus === r.symbol ? "cur" : ""}`} onClick={() => onFocus(r.symbol)}>
+                  <td><b>{r.base}</b></td>
+                  <td className={r.side}>{r.side === "long" ? "Long" : "Short"} {r.leverage}x</td>
+                  <td className="n">{pct(r.kronos_p_tp)}</td>
+                  <td className="n">{r.analog_win != null ? pct(r.analog_win) : "–"}</td>
+                  <td className="n" style={{ color: r.extra_risk > 0.5 ? "var(--short)" : r.extra_risk > 0.35 ? "var(--warn)" : "var(--long)" }}>{pct(r.extra_risk)}</td>
+                  <td className="n">{r.score.toFixed(2)}</td>
+                  <td className="faint" style={{ fontSize: 12 }}>{r.eligible ? <span className="kronos">segnale all'Executor</span> : r.reasons[0] ?? ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="note" style={{ marginTop: 8 }}>Seleziona una riga per vedere sotto l'analisi completa del token.</p>
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ checker verdict for focus token
 export function Verdict({ snap }: { snap: Snapshot | undefined }) {
   const c = snap?.checker;
   if (!c) {
     return (
       <div className="panel">
-        <h2>Analisi del Checker</h2>
+        <h2>Analisi del Checker {snap?.symbol ? <small>{snap.symbol.split("_")[1]}</small> : null}</h2>
         <p className="empty">Il Checker non ha ancora valutato questo token: serve almeno un'ora di candele da 1 minuto e una previsione Kronos.</p>
       </div>
     );
@@ -161,7 +196,7 @@ export function Verdict({ snap }: { snap: Snapshot | undefined }) {
   return (
     <div className="panel">
       <h2>
-        Analisi del Checker
+        Analisi del Checker: {c.base}
         <small>
           miglior setup: <span className={c.side}>{c.side === "long" ? "long" : "short"} {c.leverage}x</span>
           {c.eligible ? " · segnale valido" : c.reasons.length ? ` · ${c.reasons.join(", ")}` : ""}

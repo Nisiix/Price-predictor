@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, pct, price, signed, useLive } from "./api";
 import type { Snapshot } from "./api";
 import { Chart, fmtDur } from "./components/Chart";
-import { ActivityLog, AnalystPanel, ControllerPanel, HORIZON_CHOICES, HorizonLadder, Positions, Verdict, Watchlist, horizonName } from "./components/Panels";
+import { ActivityLog, AnalystPanel, CheckerTable, ControllerPanel, HORIZON_CHOICES, HorizonLadder, Positions, Verdict, Watchlist, horizonName } from "./components/Panels";
 import { Ticket, WalletPanel } from "./components/Ticket";
 import { useRealTrading } from "./wallet/useRealTrading";
 
@@ -34,6 +34,12 @@ export default function App() {
   const [bars, setBars] = useState<number[][]>([]);
   const [detail, setDetail] = useState<Snapshot | undefined>();
   const [toast, setToast] = useState<string | null>(null);
+  const [page, setPage] = useState<"market" | "agents">(() => {
+    try { return localStorage.getItem("pp.page") === "agents" ? "agents" : "market"; } catch { return "market"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("pp.page", page); } catch { /* ignore */ }
+  }, [page]);
 
   // default focus: best Checker token, else SOL
   useEffect(() => {
@@ -49,7 +55,7 @@ export default function App() {
   useEffect(() => {
     if (!focus) return;
     let alive = true;
-    const load = () => api(`/api/candles/${focus}?tf=${tf}&n=200`).then((d) => alive && setBars(d.bars)).catch(() => {});
+    const load = () => api(`/api/candles/${focus}?tf=${tf}&n=600`).then((d) => alive && setBars(d.bars)).catch(() => {});
     load();
     const id = window.setInterval(load, tf === "5s" ? 1000 : 5000);
     return () => { alive = false; window.clearInterval(id); };
@@ -112,90 +118,122 @@ export default function App() {
     await real.closeReal(p.symbol);
   };
 
+  const walletChip = real.address ? (
+    <button className={`walletchip ${real.ready ? "ok" : ""}`} onClick={() => setPage("market")} title={real.ready ? "Trading reale attivo con la chiave delegata" : "Wallet collegato: attiva il trading reale dal pannello Wallet"}>
+      <span className={`dot ${real.ready ? "ok" : "warn"}`} />
+      {real.address.slice(0, 4)}…{real.address.slice(-4)}
+    </button>
+  ) : (
+    <button className="walletbtn" onClick={real.connect}>{real.hasPhantom ? "Collega Phantom" : "Installa Phantom"}</button>
+  );
+
   return (
     <div className="shell">
       <header className="top">
         <div className="brand">
           <h1>Predictor</h1>
-          <span>Kronos su Raydium Perps · top 100 crypto</span>
         </div>
+        <nav className="pages" role="tablist" aria-label="Sezioni">
+          <button role="tab" aria-selected={page === "market"} onClick={() => setPage("market")}>Mercato</button>
+          <button role="tab" aria-selected={page === "agents"} onClick={() => setPage("agents")}>
+            Agenti{(live.executor?.positions.length ?? 0) > 0 && <span className="badge">{live.executor!.positions.length}</span>}
+          </button>
+        </nav>
         <div className="status" aria-live="polite">
           <span className="chip"><span className={`dot ${live.connected && feedOk ? "ok" : live.connected ? "warn" : "bad"}`} />Prezzi {live.connected ? (feedOk ? "in tempo reale" : "in ritardo") : "disconnesso"}</span>
           <span className="chip"><span className={`dot ${sys?.kronos.ready ? "ok" : sys?.kronos.error ? "bad" : "warn"}`} />
             {sys?.kronos.ready ? <>Kronos <b>{sys.kronos.model.split("/")[1]}</b> · {sys.kronos.scanned}/{sys.markets} token</> : sys?.kronos.error ? "Kronos non disponibile, stima statistica" : "Kronos in caricamento"}
           </span>
           <span className="chip"><span className={`dot ${(sys?.analyst.risk ?? 0) >= 70 ? "bad" : (sys?.analyst.risk ?? 0) >= 55 ? "warn" : "ok"}`} />Rischio macro <b>{(sys?.analyst.risk ?? 0).toFixed(0)}</b></span>
-          <span className="chip"><span className={`dot ${live.executor?.mode === "real" ? "warn" : "ok"}`} />{live.executor?.mode === "real" ? <b>Trading reale attivo</b> : "Simulazione"}</span>
+          <span className="chip"><span className={`dot ${live.executor?.mode === "real" ? "warn" : "ok"}`} />{live.executor?.mode === "real" ? <b>Trading reale attivo</b> : "Executor in simulazione"}</span>
         </div>
+        {walletChip}
       </header>
 
-      <main className="desk">
-        <aside className="watch">
-          <Watchlist markets={live.markets} ranking={live.ranking} prices={live.prices} focus={focus} onFocus={setFocus} paused={live.paused} pauseReason={live.pauseReason} board={live.boards[horizon] ?? null} horizon={horizon} />
-        </aside>
+      {page === "market" ? (
+        <main className="desk">
+          <aside className="watch">
+            <Watchlist markets={live.markets} ranking={live.ranking} prices={live.prices} focus={focus} onFocus={setFocus} paused={live.paused} pauseReason={live.pauseReason} board={live.boards[horizon] ?? null} horizon={horizon} />
+          </aside>
 
-        <section className="main">
-          <div className="panel">
-            {m ? (
-              <div className="tokenhead">
-                <div>
-                  <div className="sym">{m.base}</div>
-                  <div className="full">{m.name} · #{m.rank} per capitalizzazione</div>
-                </div>
-                <div>
-                  <div className="last">{price(px)}</div>
-                  <div className={`chg ${chg >= 0 ? "long" : "short"}`}>{signed(chg, 2)}% in 24 h</div>
-                </div>
-                {hstat && (
+          <section className="main">
+            <div className="panel">
+              {m ? (
+                <div className="tokenhead">
                   <div>
-                    <div className="last kronos">{price(hstat.price_q50)}</div>
-                    <div className="chg muted">mediana Kronos tra {horizonName(horizon)} · {pct(hstat.p_up)} in rialzo</div>
+                    <div className="sym">{m.base}</div>
+                    <div className="full">{m.name} · #{m.rank} per capitalizzazione</div>
                   </div>
-                )}
-                <div className="facts">
-                  <span>Leva max <b>{m.max_leverage}x</b></span>
-                  <span>Funding <b>{(m.funding_rate * 100).toFixed(4)}%</b></span>
-                  {best && <span>Checker <b className={best.side}>{best.side} {best.leverage}x</b></span>}
+                  <div>
+                    <div className="last">{price(px)}</div>
+                    <div className={`chg ${chg >= 0 ? "long" : "short"}`}>{signed(chg, 2)}% in 24 h</div>
+                  </div>
+                  {hstat && (
+                    <div>
+                      <div className="last kronos">{price(hstat.price_q50)}</div>
+                      <div className="chg muted">mediana Kronos tra {horizonName(horizon)} · {pct(hstat.p_up)} in rialzo</div>
+                    </div>
+                  )}
+                  <div className="facts">
+                    <span>Leva max <b>{m.max_leverage}x</b></span>
+                    <span>Funding <b>{(m.funding_rate * 100).toFixed(4)}%</b></span>
+                    {best && <span>Checker <b className={best.side}>{best.side} {best.leverage}x</b></span>}
+                  </div>
                 </div>
+              ) : (
+                <p className="empty">Caricamento dei mercati di Raydium Perps…</p>
+              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+                <label className="hsel">
+                  <span>Orizzonte</span>
+                  <select value={horizon} onChange={(e) => setHorizon(e.target.value)} aria-label="Orizzonte di previsione">
+                    {HORIZON_CHOICES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                  </select>
+                </label>
+                {fan ? <span className="note">Cono Kronos a {fmtDur(steps * TF_SECONDS[tf])} su {TF_NAME[tf]}, aggiornato {Math.round(fan.age)}s fa{fan.source !== "kronos" ? " (stima statistica)" : ""}</span>
+                  : <span className="note">{tf === "5s" ? "Le candele da 5 secondi si formano dai tick live: servono circa 4 minuti dopo l'avvio." : "Previsione in calcolo per questo token."}</span>}
               </div>
+              <Chart bars={liveBars} fan={fan} levels={levels} tfSeconds={TF_SECONDS[tf]} resetKey={`${focus}:${tf}`} />
+              <div className="legend">
+                <span><i style={{ background: "var(--kronos)", opacity: 0.35 }} />80% dei futuri campionati</span>
+                <span><i style={{ background: "var(--kronos)", opacity: 0.6 }} />50% centrale</span>
+                <span><i style={{ background: "none", borderTop: "2px dashed var(--kronos)", height: 0 }} />mediana</span>
+              </div>
+            </div>
+          </section>
+
+          <aside className="side">
+            <HorizonLadder snap={snap} selected={horizon} onSelect={setHorizon} />
+            {real.address ? (
+              <>
+                <Ticket m={m} snap={snap} ex={live.executor} real={real} onToast={setToast} />
+                <WalletPanel real={real} ex={live.executor} />
+              </>
             ) : (
-              <p className="empty">Caricamento dei mercati di Raydium Perps…</p>
+              <div className="panel">
+                <h2>Ordini</h2>
+                <p className="note">
+                  Senza wallet l'Executor apre e chiude da solo le posizioni simulate: le trovi nella sezione Agenti.
+                  Per operare davvero su Raydium Perps collega Phantom in alto a destra.
+                </p>
+              </div>
             )}
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
-              <label className="hsel">
-                <span>Orizzonte</span>
-                <select value={horizon} onChange={(e) => setHorizon(e.target.value)} aria-label="Orizzonte di previsione">
-                  {HORIZON_CHOICES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-                </select>
-              </label>
-              {fan ? <span className="note">Cono Kronos a {fmtDur(steps * TF_SECONDS[tf])} su {TF_NAME[tf]}, aggiornato {Math.round(fan.age)}s fa{fan.source !== "kronos" ? " (stima statistica)" : ""}</span>
-                : <span className="note">{tf === "5s" ? "Le candele da 5 secondi si formano dai tick live: servono circa 4 minuti dopo l'avvio." : "Previsione in calcolo per questo token."}</span>}
-            </div>
-            <Chart bars={liveBars} fan={fan} levels={levels} tfSeconds={TF_SECONDS[tf]} />
-            <div className="legend">
-              <span><i style={{ background: "var(--kronos)", opacity: 0.35 }} />80% dei futuri campionati</span>
-              <span><i style={{ background: "var(--kronos)", opacity: 0.6 }} />50% centrale</span>
-              <span><i style={{ background: "none", borderTop: "2px dashed var(--kronos)", height: 0 }} />mediana</span>
-            </div>
-          </div>
-          <Verdict snap={snap} />
-        </section>
-
-        <aside className="side">
-          <HorizonLadder snap={snap} selected={horizon} onSelect={setHorizon} />
-          <Ticket m={m} snap={snap} ex={live.executor} real={real} onToast={setToast} />
-          <WalletPanel real={real} ex={live.executor} />
-        </aside>
-
-        <section className="deck">
-          <div style={{ display: "grid", gap: 14 }}>
+          </aside>
+        </main>
+      ) : (
+        <main className="agents">
+          <section className="agents-checker">
+            <CheckerTable ranking={live.ranking} focus={focus} onFocus={setFocus} paused={live.paused} pauseReason={live.pauseReason} />
+            <Verdict snap={snap} />
+          </section>
+          <section className="agents-exec">
             <Positions ex={live.executor} onToast={setToast} realClose={realClose} />
             <ActivityLog log={live.log} />
-          </div>
+          </section>
           <AnalystPanel a={live.analyst} />
           <ControllerPanel r={live.report} />
-        </section>
-      </main>
+        </main>
+      )}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );

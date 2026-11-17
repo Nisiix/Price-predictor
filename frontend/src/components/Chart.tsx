@@ -1,51 +1,98 @@
-import { type ReactElement, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Fan } from "../api";
 import { price } from "../api";
 
 type Bar = number[]; // [t, o, h, l, c, v]
 type Level = { y: number; label: string; color: string };
 
-const H = 360;
+const H = 380;
 const PAD = { l: 8, r: 72, t: 12, b: 24 };
+const MIN_VISIBLE = 15;
+const MAX_VISIBLE = 400;
+const MAX_CANDLE = 16; // px: few bars stay thin instead of stretching into one giant candle
 
-export function Chart({ bars, fan, levels, tfSeconds }: { bars: Bar[]; fan: Fan | null; levels: Level[]; tfSeconds: number }) {
+/**
+ * Candles + Kronos cone. Zoom like an exchange chart: mouse wheel or the
+ * +/− buttons change how many candles are visible, dragging pans back in time.
+ * The cone is drawn only while the latest candle is in view.
+ */
+export function Chart({ bars, fan, levels, tfSeconds, resetKey }: { bars: Bar[]; fan: Fan | null; levels: Level[]; tfSeconds: number; resetKey: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(800);
+  const defaultVisible = useCallback((width: number) => Math.max(40, Math.min(140, Math.floor(width / 9))), []);
+  const [visible, setVisible] = useState(() => defaultVisible(800));
+  const [offset, setOffset] = useState(0); // candles hidden on the right (0 = live)
+  const [custom, setCustom] = useState(false); // user zoomed or panned
+  const drag = useRef<{ x: number; offset: number } | null>(null);
+
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const ro = new ResizeObserver(([e]) => setW(Math.max(320, e.contentRect.width)));
+    const ro = new ResizeObserver(([e]) => setW(Math.max(300, e.contentRect.width)));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
+  // new token or timeframe: back to the default live view
+  useEffect(() => {
+    setVisible(defaultVisible(ref.current?.clientWidth ?? 800));
+    setOffset(0);
+    setCustom(false);
+  }, [resetKey, defaultVisible]);
+
+  const maxOffset = Math.max(0, bars.length - MIN_VISIBLE);
+  const zoom = useCallback((factor: number) => {
+    setCustom(true);
+    setVisible((v) => Math.round(Math.min(MAX_VISIBLE, Math.max(MIN_VISIBLE, v * factor))));
+  }, []);
+
+  // wheel zoom needs a non-passive listener to stop the page from scrolling
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        e.preventDefault();
+        setCustom(true);
+        setOffset((o) => Math.max(0, Math.min(maxOffset, o + Math.round(e.deltaX / 20))));
+        return;
+      }
+      e.preventDefault();
+      zoom(e.deltaY > 0 ? 1.15 : 1 / 1.15);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoom, maxOffset]);
+
   const view = useMemo(() => {
-    const shown = bars.slice(-Math.max(40, Math.min(110, Math.floor(w / 8))));
-    const futN = fan ? fan.q50.length : 0;
-    const total = shown.length + futN + 1;
+    const end = bars.length - Math.min(offset, maxOffset);
+    const shown = bars.slice(Math.max(0, end - visible), end);
+    const live = offset === 0;
+    const futN = live && fan ? fan.q50.length : 0;
+    // slots are fixed by the zoom level, not by how many candles exist
+    const slots = Math.max(visible, shown.length) + futN + 1;
     const plotW = w - PAD.l - PAD.r;
-    const step = plotW / Math.max(total, 1);
+    const step = plotW / slots;
+    const firstSlot = slots - futN - 1 - shown.length; // right-align candles next to the cone
     let lo = Infinity, hi = -Infinity;
     for (const b of shown) { lo = Math.min(lo, b[3]); hi = Math.max(hi, b[2]); }
-    if (fan) for (let i = 0; i < futN; i++) { lo = Math.min(lo, fan.q10[i]); hi = Math.max(hi, fan.q90[i]); }
+    if (fan && futN) for (let i = 0; i < futN; i++) { lo = Math.min(lo, fan.q10[i]); hi = Math.max(hi, fan.q90[i]); }
     for (const l of levels) {
-      // only stretch the scale for levels reasonably close to price
       if (Number.isFinite(lo) && Math.abs(l.y / ((lo + hi) / 2) - 1) < 0.04) { lo = Math.min(lo, l.y); hi = Math.max(hi, l.y); }
     }
     if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
     const padY = (hi - lo) * 0.08 || hi * 0.001 || 1;
     lo -= padY; hi += padY;
     const y = (v: number) => PAD.t + (1 - (v - lo) / (hi - lo)) * (H - PAD.t - PAD.b);
-    const x = (i: number) => PAD.l + (i + 0.5) * step;
-    return { shown, futN, step, lo, hi, y, x };
-  }, [bars, fan, levels, w]);
+    const x = (i: number) => PAD.l + (firstSlot + i + 0.5) * step;
+    return { shown, futN, step, lo, hi, y, x, live };
+  }, [bars, fan, levels, w, visible, offset, maxOffset]);
 
-  const { shown, futN, step, lo, hi, y, x } = view;
-  const ticks = 5;
+  const { shown, futN, step, lo, hi, y, x, live } = view;
   const last = shown.length ? shown[shown.length - 1] : null;
   const nowX = shown.length ? x(shown.length - 1) : PAD.l;
+  const bw = Math.max(1.5, Math.min(MAX_CANDLE, step * 0.66));
 
-  // forecast cone: starts at the last close and widens to the right
   let cone: ReactElement | null = null;
   if (fan && last && futN) {
     const xs = [nowX, ...fan.q50.map((_, i) => x(shown.length + i))];
@@ -67,16 +114,40 @@ export function Chart({ bars, fan, levels, tfSeconds }: { bars: Bar[]; fan: Fan 
 
   const fmtTime = (t: number) => {
     const d = new Date(t * 1000);
-    return tfSeconds < 60
-      ? d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-      : d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+    const opts: Intl.DateTimeFormatOptions = tfSeconds < 60 ? { hour: "2-digit", minute: "2-digit", second: "2-digit" } : { hour: "2-digit", minute: "2-digit" };
+    const sameDay = new Date().toDateString() === d.toDateString();
+    return (sameDay ? "" : d.toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit" }) + " ") + d.toLocaleTimeString("it-IT", opts);
   };
+  const timeTicks = shown.length > 1 ? [0, Math.floor(shown.length / 3), Math.floor((2 * shown.length) / 3)] : shown.length ? [0] : [];
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    drag.current = { x: e.clientX, offset };
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!drag.current) return;
+    const dBars = Math.round((e.clientX - drag.current.x) / Math.max(step, 1));
+    if (dBars) setCustom(true);
+    setOffset(Math.max(0, Math.min(maxOffset, drag.current.offset + dBars)));
+  };
+  const onPointerUp = () => { drag.current = null; };
 
   return (
     <div ref={ref} className="chartwrap">
-      <svg className="chart" width={w} height={H} role="img" aria-label="Grafico a candele con il cono di previsione di Kronos">
-        {Array.from({ length: ticks }, (_, i) => {
-          const v = lo + ((i + 0.5) / ticks) * (hi - lo);
+      <div className="zoombar" role="group" aria-label="Zoom del grafico">
+        <button className="ghost" onClick={() => zoom(1 / 1.4)} aria-label="Ingrandisci" title="Ingrandisci (rotella in su)">+</button>
+        <button className="ghost" onClick={() => zoom(1.4)} aria-label="Riduci" title="Riduci (rotella in giù)">−</button>
+        {custom && (
+          <button className="ghost" onClick={() => { setOffset(0); setVisible(defaultVisible(w)); setCustom(false); }}>{live ? "Vista predefinita" : "Torna al prezzo attuale"}</button>
+        )}
+      </div>
+      <svg
+        className="chart" width={w} height={H} role="img" aria-label="Grafico a candele con il cono di previsione di Kronos"
+        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp}
+        style={{ cursor: drag.current ? "grabbing" : "grab", touchAction: "pan-y" }}
+      >
+        {Array.from({ length: 5 }, (_, i) => {
+          const v = lo + ((i + 0.5) / 5) * (hi - lo);
           return (
             <g key={i}>
               <line className="grid" x1={PAD.l} x2={w - PAD.r} y1={y(v)} y2={y(v)} />
@@ -84,12 +155,10 @@ export function Chart({ bars, fan, levels, tfSeconds }: { bars: Bar[]; fan: Fan 
             </g>
           );
         })}
-        {/* future zone */}
-        {futN > 0 && <rect x={nowX + step / 2} y={PAD.t} width={w - PAD.r - nowX - step / 2} height={H - PAD.t - PAD.b} fill="var(--kronos)" opacity={0.035} />}
+        {futN > 0 && <rect x={nowX + step / 2} y={PAD.t} width={Math.max(0, w - PAD.r - nowX - step / 2)} height={H - PAD.t - PAD.b} fill="var(--kronos)" opacity={0.035} />}
         {shown.map((b, i) => {
           const up = b[4] >= b[1];
           const c = up ? "var(--long)" : "var(--short)";
-          const bw = Math.max(1.5, step * 0.62);
           const top = y(Math.max(b[1], b[4]));
           const h = Math.max(1, Math.abs(y(b[1]) - y(b[4])));
           return (
@@ -115,13 +184,17 @@ export function Chart({ bars, fan, levels, tfSeconds }: { bars: Bar[]; fan: Fan 
             <text x={w - PAD.r + 6} y={y(last[4]) + 4} style={{ fill: "var(--ink)", fontWeight: 600 }}>{price(last[4])}</text>
           </g>
         )}
-        {shown.length > 0 && [0, Math.floor(shown.length / 2)].map((i) => (
-          <text key={i} x={x(i)} y={H - 6}>{fmtTime(shown[i][0])}</text>
-        ))}
+        {timeTicks.map((i) => <text key={i} x={x(i) - 14} y={H - 6}>{fmtTime(shown[i][0])}</text>)}
         {fan && futN > 0 && (
           <text x={x(shown.length + futN - 1) - 30} y={H - 6} style={{ fill: "var(--kronos)" }}>+{fmtDur(futN * tfSeconds)}</text>
         )}
+        {shown.length < 3 && (
+          <text x={PAD.l + 12} y={PAD.t + 24} style={{ fill: "var(--muted)", fontSize: 13 }}>Storico delle candele in caricamento…</text>
+        )}
       </svg>
+      <div className="note" style={{ marginTop: 4 }}>
+        {shown.length} candele visibili · rotella o +/− per lo zoom, trascina per scorrere nel tempo
+      </div>
     </div>
   );
 }

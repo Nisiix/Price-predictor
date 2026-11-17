@@ -301,6 +301,8 @@ async def ws(socket: WebSocket):
                 _focus.clear()
                 _focus[msg["symbol"]] = time.time()
                 predictor.focus = set(_focus)
+                if not feed.history_ready(msg["symbol"]):
+                    asyncio.create_task(feed.ensure_history(msg["symbol"]))
             elif msg.get("type") == "horizon" and msg.get("h") in HORIZONS:
                 _client_horizon[id(socket)] = msg["h"]
                 _sync_horizons()

@@ -63,7 +63,7 @@ export function Ticket({ m, snap, ex, real, onToast }: { m: Market | undefined; 
 
   return (
     <div className="panel">
-      <h2>Ordine su {m.base} <small>{live ? "reale, firmato con la chiave delegata" : "simulato (nessun wallet attivo)"}</small></h2>
+      <h2>Ordine su {m.base} <small>{live ? "reale su Raydium Perps" : "attiva il trading reale per inviarlo"}</small></h2>
       <div className="ticket">
         <div className="seg">
           <button className="l" aria-pressed={side === "long"} onClick={() => setSide("long")}>Long</button>
@@ -88,9 +88,13 @@ export function Ticket({ m, snap, ex, real, onToast }: { m: Market | undefined; 
         <p className="note">
           Esposizione {(margin * lev).toLocaleString("it-IT")} USDC · liquidazione stimata {price(liq)}. Senza valori, TP e SL seguono le regole dell'Executor (+{ex?.tp_pct ?? 5}% / −{ex?.sl_pct ?? 2}% con leva).
         </p>
-        <button className={`primary ${side === "long" ? "l" : "s"}`} disabled={sending || (type === "limit" && !(Number(limit) > 0))} onClick={submit}>
-          {sending ? "Invio…" : `${side === "long" ? "Apri long" : "Apri short"} ${live ? "reale" : "simulato"}`}
-        </button>
+        {live ? (
+          <button className={`primary ${side === "long" ? "l" : "s"}`} disabled={sending || (type === "limit" && !(Number(limit) > 0))} onClick={submit}>
+            {sending ? "Invio…" : `${side === "long" ? "Apri long" : "Apri short"} ${type === "market" ? "a mercato" : "limite"}`}
+          </button>
+        ) : (
+          <button className="walletbtn" disabled={real.busy} onClick={real.enable}>{real.busy ? "Firma in Phantom…" : "Attiva trading reale"}</button>
+        )}
       </div>
     </div>
   );

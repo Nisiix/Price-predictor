@@ -257,3 +257,29 @@ table.t td.n, table.t th.n { text-align: right; }
 .rung.sel .hbtn { color: var(--kronos); text-decoration: none; }
 .wl .prob { text-align: right; font: 650 15px var(--display); }
 .wl .meta .side-tag { margin-left: 2px; }
+
+/* ------------------------------------------------------------ pages */
+.pages { display: inline-flex; gap: 2px; background: var(--hull); border-radius: var(--r-chip); padding: 3px; margin-right: auto; }
+.pages button { border: 0; background: none; color: var(--muted); padding: 6px 16px; border-radius: var(--r-chip); cursor: pointer; font: 600 14px var(--display); display: inline-flex; align-items: center; gap: 6px; }
+.pages button[aria-selected="true"] { background: var(--hull-2); color: var(--text); box-shadow: inset 0 -2px 0 var(--kronos); }
+.badge { background: var(--kronos); color: var(--ink); border-radius: var(--r-chip); font-size: 11px; padding: 0 6px; }
+.brand { margin-right: 0; }
+.walletchip { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--hull); border-radius: var(--r-chip); padding: 6px 12px; cursor: pointer; font-size: 13px; }
+.walletchip.ok { border-color: var(--long-deep); }
+.walletbtn:disabled { opacity: 0.5; cursor: wait; }
+.agents {
+  display: grid; gap: 14px; padding: 14px 22px 22px; align-items: start;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+}
+.agents-checker, .agents-exec { display: grid; gap: 14px; min-width: 0; }
+@media (max-width: 1100px) { .agents { grid-template-columns: 1fr; padding: 12px 16px; } }
+table.t tr.clickable { cursor: pointer; }
+table.t tr.clickable:hover td { background: var(--hull-2); }
+table.t tr.cur td { background: var(--hull-2); }
+table.t tr.cur td:first-child { box-shadow: inset 3px 0 0 var(--kronos); }
+.chartwrap { position: relative; }
+.zoombar { position: absolute; top: 8px; left: 12px; display: flex; gap: 6px; z-index: 2; }
+.zoombar .ghost { background: var(--hull); min-width: 30px; padding: 4px 9px; font-weight: 600; }
+.desk { grid-template-areas: "watch main side"; }
+@media (max-width: 1280px) { .desk { grid-template-areas: "watch main" "side side"; } }
+@media (max-width: 820px) { .desk { grid-template-areas: "main" "side" "watch"; } }
