@@ -16,7 +16,9 @@ const MAX_CANDLE = 16; // px: few bars stay thin instead of stretching into one 
  * +/− buttons change how many candles are visible, dragging pans back in time.
  * The cone is drawn only while the latest candle is in view.
  */
-export function Chart({ bars, fan, levels, tfSeconds, resetKey }: { bars: Bar[]; fan: Fan | null; levels: Level[]; tfSeconds: number; resetKey: string }) {
+export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLabel }: {
+  bars: Bar[]; fan: Fan | null; levels: Level[]; tfSeconds: number; resetKey: string; markStep?: number; markLabel?: string;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(800);
   const defaultVisible = useCallback((width: number) => Math.max(40, Math.min(140, Math.floor(width / 9))), []);
@@ -108,6 +110,13 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey }: { bars: Bar[];
         <polygon points={band(fan.q25, fan.q75)} fill="var(--kronos)" opacity={0.22} />
         <polyline points={med} fill="none" stroke="var(--kronos)" strokeWidth={1.8} strokeDasharray="5 4" />
         <circle cx={xs[xs.length - 1]} cy={y(fan.q50[futN - 1])} r={3.5} fill="var(--kronos)" />
+        {markStep && markStep <= futN && (
+          <g>
+            <line x1={xs[markStep]} x2={xs[markStep]} y1={PAD.t} y2={H - PAD.b} stroke="var(--kronos)" strokeWidth={1} strokeDasharray="3 3" opacity={0.8} />
+            <circle cx={xs[markStep]} cy={y(fan.q50[markStep - 1])} r={5} fill="var(--ink)" stroke="var(--kronos)" strokeWidth={2} />
+            <text x={xs[markStep] + 6} y={PAD.t + 12} style={{ fill: "var(--kronos)", fontWeight: 600 }}>{markLabel}: {price(fan.q50[markStep - 1])}</text>
+          </g>
+        )}
       </g>
     );
   }

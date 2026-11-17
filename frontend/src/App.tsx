@@ -6,12 +6,12 @@ import { ActivityLog, AnalystPanel, CheckerTable, ControllerPanel, HORIZON_CHOIC
 import { Ticket, WalletPanel } from "./components/Ticket";
 import { useRealTrading } from "./wallet/useRealTrading";
 
-const TF_SECONDS: Record<string, number> = { "5s": 5, "1m": 60, "5m": 300 };
+const TF_SECONDS: Record<string, number> = { "5s": 5, "1m": 60, "5m": 300, "15m": 900 };
 // horizon -> [candle timeframe, steps on that timeframe] (mirrors backend/app/config.py HORIZONS)
-const HORIZON_TF: Record<string, ["5s" | "1m" | "5m", number]> = {
-  "5s": ["5s", 1], "10s": ["5s", 2], "30s": ["5s", 6], "1m": ["1m", 1], "15m": ["1m", 15], "30m": ["5m", 6], "1h": ["5m", 12],
+const HORIZON_TF: Record<string, ["5s" | "1m" | "5m" | "15m", number]> = {
+  "5s": ["5s", 1], "10s": ["5s", 2], "30s": ["5s", 6], "1m": ["1m", 1], "15m": ["1m", 15], "30m": ["5m", 6], "1h": ["5m", 12], "4h": ["15m", 16],
 };
-const TF_NAME: Record<string, string> = { "5s": "candele da 5 secondi", "1m": "candele da 1 minuto", "5m": "candele da 5 minuti" };
+const TF_NAME: Record<string, string> = { "5s": "candele da 5 secondi", "1m": "candele da 1 minuto", "5m": "candele da 5 minuti", "15m": "candele da 15 minuti" };
 
 export default function App() {
   const [focus, setFocus] = useState<string | null>(() => {
@@ -98,12 +98,8 @@ export default function App() {
 
   const m = live.markets.find((x) => x.symbol === focus);
   const snap: Snapshot | undefined = focus ? { ...(detail ?? ({} as Snapshot)), ...(live.focus[focus] ?? {}), checker: detail?.checker } : undefined;
-  // cone trimmed to the selected horizon
-  const fullFan = snap?.fans?.[tf] ?? null;
-  const fan = fullFan
-    ? { ...fullFan, t: fullFan.t.slice(0, steps), q10: fullFan.q10.slice(0, steps), q25: fullFan.q25.slice(0, steps),
-        q50: fullFan.q50.slice(0, steps), q75: fullFan.q75.slice(0, steps), q90: fullFan.q90.slice(0, steps) }
-    : null;
+  // the whole sampled projection; the selected horizon is marked on it
+  const fan = snap?.fans?.[tf] ?? null;
   const px = focus ? live.prices[focus]?.p ?? m?.mark_price : undefined;
   const chg = focus ? live.prices[focus]?.c ?? m?.change_24h ?? 0 : 0;
 
@@ -209,10 +205,10 @@ export default function App() {
                     {HORIZON_CHOICES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
                   </select>
                 </label>
-                {fan ? <span className="note">Cono Kronos a {fmtDur(steps * TF_SECONDS[tf])} su {TF_NAME[tf]}, aggiornato {Math.round(fan.age)}s fa{fan.source !== "kronos" ? " (stima statistica)" : ""}</span>
+                {fan ? <span className="note">Proiezione Kronos fino a {fmtDur(fan.q50.length * TF_SECONDS[tf])} su {TF_NAME[tf]}, orizzonte {horizonName(horizon)} segnato sul grafico, aggiornata {Math.round(fan.age)}s fa{fan.source !== "kronos" ? " (stima statistica)" : ""}</span>
                   : <span className="note">{tf === "5s" ? "Le candele da 5 secondi si formano dai tick live: servono circa 4 minuti dopo l'avvio." : "Previsione in calcolo per questo token."}</span>}
               </div>
-              <Chart bars={liveBars} fan={fan} levels={levels} tfSeconds={TF_SECONDS[tf]} resetKey={`${focus}:${tf}`} />
+              <Chart bars={liveBars} fan={fan} levels={levels} tfSeconds={TF_SECONDS[tf]} resetKey={`${focus}:${tf}`} markStep={steps} markLabel={horizonName(horizon)} />
               <div className="legend">
                 <span><i style={{ background: "var(--kronos)", opacity: 0.35 }} />80% dei futuri campionati</span>
                 <span><i style={{ background: "var(--kronos)", opacity: 0.6 }} />50% centrale</span>

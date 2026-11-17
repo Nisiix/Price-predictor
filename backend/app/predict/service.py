@@ -20,10 +20,10 @@ from .probability import best_trade, fan, horizon_stats
 
 log = logging.getLogger("predict")
 
-MIN_BARS = {"5s": 48, "1m": 64, "5m": 64}
-MAX_AGE = {"5s": 5.0, "1m": 30.0, "5m": 120.0}  # refresh interval for the focus token
+MIN_BARS = {"5s": 48, "1m": 64, "5m": 64, "15m": 64}
+MAX_AGE = {"5s": 5.0, "1m": 30.0, "5m": 120.0, "15m": 300.0}  # refresh interval for the focus token
 SCAN_AGE = 150.0  # refresh interval for universe scan on 1m (Checker)
-BOARD_AGE = {"5s": 40.0, "1m": 90.0, "5m": 150.0}  # refresh for the horizon chosen on the dashboard
+BOARD_AGE = {"5s": 40.0, "1m": 90.0, "5m": 150.0, "15m": 300.0}  # refresh for the horizon chosen on the dashboard
 
 
 class PredictionService:
@@ -92,7 +92,7 @@ class PredictionService:
             return c is None or now - c["ts"] > age
 
         for sym in list(self.focus):
-            for tf in ("5s", "1m", "5m"):
+            for tf in ("5s", "1m", "5m", "15m"):
                 if stale(sym, tf, MAX_AGE[tf]) and self.feed.store.count(sym, tf) >= MIN_BARS[tf]:
                     return sym, tf
         for sym in list(self.priority):
@@ -187,7 +187,7 @@ class PredictionService:
 
     def snapshot(self, sym: str) -> dict:
         res = {"symbol": sym, "horizons": self.horizons(sym), "fans": {}, "trade": None}
-        for tf in ("5s", "1m", "5m"):
+        for tf in ("5s", "1m", "5m", "15m"):
             c = self.cache.get((sym, tf))
             if c:
                 res["fans"][tf] = {"t": c["future_t"], **c["fan"], "anchor": c["last"], "bar_t": c["bar_t"],

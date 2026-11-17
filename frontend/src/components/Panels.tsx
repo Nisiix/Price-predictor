@@ -2,8 +2,8 @@ import { useMemo, useState } from "react";
 import type { AnalystView, Board, CheckerRow, ExecutorView, HorizonStat, LogEntry, Market, Position, Report, Snapshot } from "../api";
 import { ago, pct, postJSON, price, signed, usd } from "../api";
 
-const HORIZON_ORDER = ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h"];
-export const HORIZON_CHOICES: [string, string][] = [["15m", "15 minuti"], ["30m", "30 minuti"], ["1h", "1 ora"]];
+const HORIZON_ORDER = ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h", "4h"];
+export const HORIZON_CHOICES: [string, string][] = [["15m", "15 minuti"], ["30m", "30 minuti"], ["1h", "1 ora"], ["4h", "4 ore"]];
 export const horizonName = (h: string) => HORIZON_CHOICES.find(([k]) => k === h)?.[1] ?? h;
 
 // ------------------------------------------------------------------ watchlist (Checker ranking)

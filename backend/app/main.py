@@ -137,8 +137,8 @@ def state():
 
 @app.get("/api/candles/{symbol}")
 def candles(symbol: str, tf: str = "1m", n: int = 300, since: float | None = None):
-    if tf not in ("5s", "1m", "5m"):
-        raise HTTPException(400, "tf must be 5s, 1m or 5m")
+    if tf not in ("5s", "1m", "5m", "15m"):
+        raise HTTPException(400, "tf must be 5s, 1m, 5m or 15m")
     bars = feed.store.get(symbol, tf, min(n, 3000))
     if since is not None and len(bars):
         bars = bars[bars[:, 0] >= since]  # incremental refresh: only bars from `since` on
@@ -303,7 +303,7 @@ async def ws(socket: WebSocket):
                 _focus.clear()
                 _focus[msg["symbol"]] = time.time()
                 predictor.focus = set(_focus)
-                if not feed.history_ready(msg["symbol"]) or feed.store.count(msg["symbol"], "5m") <= 1100:
+                if not feed.history_ready(msg["symbol"]) or min(feed.store.count(msg["symbol"], t) for t in ("5m", "15m")) <= 1100:
                     asyncio.create_task(feed.ensure_history(msg["symbol"]))
             elif msg.get("type") == "horizon" and msg.get("h") in HORIZONS:
                 _client_horizon[id(socket)] = msg["h"]

@@ -65,7 +65,7 @@ class Settings:
 settings = Settings()
 
 # Horizons shown on the dashboard: label -> (seconds, timeframe used, steps on that timeframe)
-TIMEFRAMES = {"5s": 5, "1m": 60, "5m": 300}
+TIMEFRAMES = {"5s": 5, "1m": 60, "5m": 300, "15m": 900}
 HORIZONS: dict[str, tuple[int, str, int]] = {
     "5s": (5, "5s", 1),
     "10s": (10, "5s", 2),
@@ -75,6 +75,8 @@ HORIZONS: dict[str, tuple[int, str, int]] = {
     "15m": (900, "1m", 15),
     "30m": (1800, "5m", 6),
     "1h": (3600, "5m", 12),
+    "4h": (14400, "15m", 16),
 }
-PRED_LEN = {"5s": 12, "1m": 30, "5m": 12}  # steps sampled per timeframe
+# steps sampled per timeframe: the cone on the chart goes this far (1m: 30 min, 5m: 2 h, 15m: 8 h)
+PRED_LEN = {"5s": 12, "1m": 30, "5m": 24, "15m": 32}
 EXPERIMENTAL_HORIZONS = {"5s", "10s", "30s"}  # sub-minute: outside Kronos' training resolution

@@ -19,6 +19,7 @@ from ..config import TIMEFRAMES, settings
 from .candles import CandleStore
 
 log = logging.getLogger("feed")
+HISTORY_TFS = ("1m", "5m", "15m")  # timeframes with exchange history (5s bars are built from live ticks)
 
 STABLES = {
     "USDT", "USDC", "USDS", "USDE", "DAI", "USD1", "RLUSD", "USDG", "USDY", "PYUSD", "USDF", "FDUSD",
@@ -150,7 +151,7 @@ class MarketFeed:
 
     async def load_history(self, symbol: str, tf: str, before: int | None = None) -> int:
         """Fetch up to 1000 closed bars ending at `before` (default: now). Returns how many arrived."""
-        res = {"1m": "1m", "5m": "5m"}[tf]
+        res = {"1m": "1m", "5m": "5m", "15m": "15m"}[tf]
         to = int(before or time.time())
         span = TIMEFRAMES[tf] * 1000
         d = await self._get(
@@ -223,17 +224,17 @@ class MarketFeed:
 
     async def ensure_history(self, sym: str) -> None:
         """Load a token's candles right away (e.g. when it is opened on the dashboard)."""
-        for tf in ("1m", "5m"):
+        for tf in HISTORY_TFS:
             if f"{sym}:{tf}" not in self._history_ready or self.store.count(sym, tf) < 2:
                 await self._try_history(sym, tf)
-        for tf in ("1m", "5m"):
+        for tf in HISTORY_TFS:
             if self.store.count(sym, tf) <= 1100:
                 await self._deepen(sym, tf)
 
     async def _history_loop(self) -> None:
         """Backfill every market (retrying what the rate limit rejected), then refresh closed bars every few minutes."""
         while True:
-            pending = [(s, tf) for s in list(self.markets) for tf in ("1m", "5m")]
+            pending = [(s, tf) for s in list(self.markets) for tf in HISTORY_TFS]
             for attempt in range(8):
                 failed = [(s, tf) for s, tf in pending if not await self._try_history(s, tf)]
                 if not failed:
@@ -243,7 +244,7 @@ class MarketFeed:
                 await asyncio.sleep(10 * (attempt + 1))
             if not self._deep_done:
                 for s in list(self.markets):
-                    for tf in ("1m", "5m"):
+                    for tf in HISTORY_TFS:
                         await self._deepen(s, tf)
                 self._deep_done = True
                 log.info("history: deep backfill complete")
