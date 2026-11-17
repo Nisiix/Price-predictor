@@ -72,6 +72,7 @@ class MarketFeed:
         self._client = httpx.AsyncClient(timeout=15, headers={"User-Agent": "price-predictor/1.0"})
         self._history_ready: set[str] = set()
         self._history_lock = asyncio.Lock()
+        self._deep_done = False
 
     # ---------------------------------------------------------------- helpers
     async def _get(self, url: str, **params) -> dict:
@@ -147,18 +148,37 @@ class MarketFeed:
             self.store.update_tick(m.symbol, price, now)
         self.last_tick_ts = now
 
-    async def load_history(self, symbol: str, tf: str) -> None:
+    async def load_history(self, symbol: str, tf: str, before: int | None = None) -> int:
+        """Fetch up to 1000 closed bars ending at `before` (default: now). Returns how many arrived."""
         res = {"1m": "1m", "5m": "5m"}[tf]
-        now = int(time.time())
+        to = int(before or time.time())
         span = TIMEFRAMES[tf] * 1000
         d = await self._get(
-            f"{settings.orderly_api}/v1/tv/kline_history", symbol=symbol, resolution=res, **{"from": now - span, "to": now}
+            f"{settings.orderly_api}/v1/tv/kline_history", symbol=symbol, resolution=res, **{"from": to - span, "to": to}
         )
         if d.get("s") != "ok":
-            return
+            return 0
         bars = [[t, o, h, l, c, v] for t, o, h, l, c, v in zip(d["t"], d["o"], d["h"], d["l"], d["c"], d["v"])]
         self.store.set_history(symbol, tf, bars)
-        self._history_ready.add(f"{symbol}:{tf}")
+        if before is None:
+            self._history_ready.add(f"{symbol}:{tf}")
+        return len(bars)
+
+    async def _deepen(self, sym: str, tf: str, pages: int = 2) -> None:
+        """Older pages so the chart can scroll back days, not just since startup."""
+        for _ in range(pages):
+            async with self._history_lock:
+                try:
+                    first = self.store.get(sym, tf, None)
+                    if not len(first):
+                        return
+                    n = await self.load_history(sym, tf, before=int(first[0, 0]) - 1)
+                except Exception as exc:
+                    log.debug("deep history %s %s failed: %s", sym, tf, exc)
+                    n = -1
+                await asyncio.sleep(0.8 if n >= 0 else 6)
+            if n == 0:
+                return
 
     def history_ready(self, symbol: str) -> bool:
         return f"{symbol}:1m" in self._history_ready and f"{symbol}:5m" in self._history_ready
@@ -206,6 +226,9 @@ class MarketFeed:
         for tf in ("1m", "5m"):
             if f"{sym}:{tf}" not in self._history_ready or self.store.count(sym, tf) < 2:
                 await self._try_history(sym, tf)
+        for tf in ("1m", "5m"):
+            if self.store.count(sym, tf) <= 1100:
+                await self._deepen(sym, tf)
 
     async def _history_loop(self) -> None:
         """Backfill every market (retrying what the rate limit rejected), then refresh closed bars every few minutes."""
@@ -218,6 +241,12 @@ class MarketFeed:
                 log.info("history: %d series rejected, retrying", len(failed))
                 pending = failed
                 await asyncio.sleep(10 * (attempt + 1))
+            if not self._deep_done:
+                for s in list(self.markets):
+                    for tf in ("1m", "5m"):
+                        await self._deepen(s, tf)
+                self._deep_done = True
+                log.info("history: deep backfill complete")
             await asyncio.sleep(180)
 
     async def _universe_loop(self) -> None:

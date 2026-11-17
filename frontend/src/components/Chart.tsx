@@ -8,7 +8,7 @@ type Level = { y: number; label: string; color: string };
 const H = 380;
 const PAD = { l: 8, r: 72, t: 12, b: 24 };
 const MIN_VISIBLE = 15;
-const MAX_VISIBLE = 400;
+const MAX_VISIBLE = 1500;
 const MAX_CANDLE = 16; // px: few bars stay thin instead of stretching into one giant candle
 
 /**

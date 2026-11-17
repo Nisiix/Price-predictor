@@ -6,7 +6,7 @@ from collections import deque
 
 import numpy as np
 
-MAX_BARS = 1500
+MAX_BARS = 3000  # 1m: ~2 days, 5m: ~10 days
 
 
 class CandleStore:

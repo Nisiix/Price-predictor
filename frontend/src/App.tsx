@@ -51,14 +51,33 @@ export default function App() {
     if (focus) try { localStorage.setItem("pp.focus", focus); } catch { /* ignore */ }
   }, [focus]);
 
-  // candles: refresh every second on 5s bars, every 5s otherwise
+  // candles: full history once (up to 3000 bars), then only the newest bars merged in
   useEffect(() => {
     if (!focus) return;
     let alive = true;
-    const load = () => api(`/api/candles/${focus}?tf=${tf}&n=600`).then((d) => alive && setBars(d.bars)).catch(() => {});
-    load();
-    const id = window.setInterval(load, tf === "5s" ? 1000 : 5000);
-    return () => { alive = false; window.clearInterval(id); };
+    let full: number[][] = [];
+    let fullLoads = 0;
+    const loadFull = () => api(`/api/candles/${focus}?tf=${tf}&n=3000`).then((d) => {
+      if (!alive) return;
+      full = d.bars;
+      fullLoads += 1;
+      setBars(full);
+    }).catch(() => {});
+    const loadNew = () => {
+      if (!full.length) return loadFull();
+      const since = full[full.length - 1][0];
+      return api(`/api/candles/${focus}?tf=${tf}&n=50&since=${since}`).then((d) => {
+        if (!alive || !d.bars.length) return;
+        const head = full.filter((b) => b[0] < d.bars[0][0]);
+        full = [...head, ...d.bars];
+        setBars(full);
+      }).catch(() => {});
+    };
+    loadFull();
+    const id = window.setInterval(loadNew, tf === "5s" ? 1000 : 3000);
+    // older pages arrive in the background during the first minutes: re-read the full series a few times
+    const deep = window.setInterval(() => { if (fullLoads < 6) loadFull(); }, 30_000);
+    return () => { alive = false; window.clearInterval(id); window.clearInterval(deep); };
   }, [focus, tf]);
 
   // checker detail for the focused token
