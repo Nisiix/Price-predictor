@@ -21,11 +21,15 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
+import os
+import re
 
 import numpy as np
 import logging
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
+from pathlib import Path
 
 from ..config import settings
 from ..predict.probability import trade_levels
@@ -95,7 +99,7 @@ class PendingOrder:
 
 
 class Executor:
-    def __init__(self, feed, checker, controller, bus) -> None:
+    def __init__(self, feed, checker, controller, bus, state_path: Path | None = None) -> None:
         self.feed = feed
         self.checker = checker
         self.controller = controller
@@ -116,6 +120,57 @@ class Executor:
         self.equity_hist: list[tuple[float, float]] = []  # (ts, paper equity) every 30 s, last 12 h
         self._last_hist = 0.0
         self.venue_rows: list[dict] = []
+        self.state_path = state_path  # None (tests): nothing is read or written
+        self._last_save = 0.0
+        self.restored = self.load_state()
+
+    # ------------------------------------------------------------- persistence
+    def _state(self) -> dict:
+        """Simulated account only: real positions live on the venue and are reconciled from the browser."""
+        return {
+            "version": 1, "saved_ts": time.time(), "balance": self.balance, "paper_started": self.paper_started,
+            "positions": [asdict(p) for p in self.open_positions() if p.mode == "paper"],
+            "pending": [asdict(o) for o in self.pending.values()],
+            "equity_hist": self.equity_hist,
+        }
+
+    def save_state(self) -> None:
+        if self.state_path is None:
+            return
+        try:
+            tmp = self.state_path.with_name(self.state_path.name + ".tmp")
+            tmp.write_text(json.dumps(self._state(), default=str))
+            os.replace(tmp, self.state_path)  # atomic: a crash mid-write never leaves a broken file
+            self._last_save = time.time()
+        except Exception:
+            log.exception("could not save the simulated account")
+
+    def load_state(self) -> bool:
+        """Restore the simulated balance, open simulated positions and limit orders saved by a previous run."""
+        global _ids
+        if self.state_path is None or not self.state_path.exists():
+            return False
+        try:
+            st = json.loads(self.state_path.read_text())
+            pos_fields = {f.name for f in fields(Position)}
+            ord_fields = {f.name for f in fields(PendingOrder)}
+            positions = [Position(**{k: v for k, v in d.items() if k in pos_fields}) for d in st.get("positions", [])]
+            pending = [PendingOrder(**{k: v for k, v in d.items() if k in ord_fields}) for d in st.get("pending", [])]
+        except Exception:
+            log.exception("simulated account file unreadable, starting from the initial balance")
+            return False
+        self.balance = float(st.get("balance", self.balance))
+        self.paper_started = float(st.get("paper_started", self.paper_started))
+        self.equity_hist = [tuple(x) for x in st.get("equity_hist", [])][-1440:]
+        self.positions = {p.id: p for p in positions}
+        self.pending = {o.id: o for o in pending}
+        # new ids must not collide with the restored ones
+        nums = [int(m.group(1)) for i in list(self.positions) + list(self.pending) if (m := re.match(r"[A-Z](\d+)$", i))]
+        if nums:
+            _ids = itertools.count(max(max(nums) + 1, next(_ids)))
+        log.info("simulated account restored: balance %.2f, %d open positions, %d limit orders",
+                 self.balance, len(self.positions), len(self.pending))
+        return True
 
     # ------------------------------------------------------------- helpers
     @property
@@ -461,7 +516,10 @@ class Executor:
         return None
 
     async def run(self) -> None:
-        last = time.time()
+        if self.restored:
+            self.bus.agent_log("Executor", f"Conto simulato ripristinato: saldo {self.balance:.2f} USDC, "
+                                           f"{len(self.open_positions())} posizioni aperte, {len(self.pending)} ordini limite", "info")
+        last = time.time()  # the downtime is not charged as funding
         while True:
             now = time.time()
             dt, last = now - last, now
@@ -488,6 +546,8 @@ class Executor:
                     self._last_hist = time.time()
                     self.equity_hist.append((self._last_hist, self.paper_equity()))
                     self.equity_hist = self.equity_hist[-1440:]
+                if time.time() - self._last_save >= 5:
+                    self.save_state()
                 held = {p.symbol for p in self.open_positions()}
                 if self.predictor is not None:
                     self.predictor.priority = held

@@ -339,3 +339,37 @@ def test_risk_tiers_share_of_capital():
     feed, ctl, ex = make()
     p = open_long(ex, lev=10)  # risk 0.2 -> 10% of 1000 = 100 USDC, fits the liquidation rule at 10x
     assert p.margin == pytest.approx(100.0, rel=0.01)
+
+
+def test_simulated_account_survives_a_restart(tmp_path):
+    state = tmp_path / "paper_state.json"
+    feed = FakeFeed(100.0)
+    ex = Executor(feed, FakeChecker(), FakeController(), FakeBus(), state)
+    assert not ex.restored  # no file yet: initial balance
+    p = open_long(ex)
+    ex.equity_hist.append((time.time(), ex.paper_equity()))
+    balance = ex.balance
+    ex.save_state()
+
+    ex2 = Executor(feed, FakeChecker(), FakeController(), FakeBus(), state)
+    assert ex2.restored
+    assert ex2.balance == pytest.approx(balance)
+    assert ex2.paper_started == pytest.approx(ex.paper_started)
+    assert len(ex2.equity_hist) == 1
+    q = ex2.positions[p.id]
+    assert (q.symbol, q.side, q.entry, q.margin, q.leverage, q.status) == (p.symbol, p.side, p.entry, p.margin, p.leverage, "open")
+    # a new position after the restore gets a fresh id
+    new = ex2._make_position("PERP_SOL_USDC", 1, 10, 10.0, 100.0, "manual")
+    assert new.id != p.id
+    # closing a restored position credits the restored balance
+    asyncio.run(ex2.close(q.id, "test", 100.0))
+    assert not ex2.open_positions()
+    assert ex2.balance > balance
+
+
+def test_unreadable_simulated_account_starts_fresh(tmp_path):
+    state = tmp_path / "paper_state.json"
+    state.write_text("{not json")
+    ex = Executor(FakeFeed(100.0), FakeChecker(), FakeController(), FakeBus(), state)
+    assert not ex.restored
+    assert ex.balance == settings.paper_start_balance

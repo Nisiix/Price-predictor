@@ -31,7 +31,7 @@ feed = MarketFeed()
 predictor = PredictionService(feed)
 controller = Controller(bus)
 checker = Checker(feed, predictor, bus)
-executor = Executor(feed, checker, controller, bus)
+executor = Executor(feed, checker, controller, bus, settings.paper_state_path)
 analyst = Analyst(feed, checker, executor, bus)
 executor.predictor = predictor
 controller.predictor = predictor
@@ -93,6 +93,7 @@ async def lifespan(_: FastAPI):
     yield
     for t in tasks:
         t.cancel()
+    executor.save_state()  # simulated balance and open positions survive the restart
 
 
 app = FastAPI(title="Price predictor", lifespan=lifespan)

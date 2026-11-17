@@ -93,6 +93,8 @@ class Settings:
     news_poll_s: int = _i("PP_NEWS_POLL_S", 120)
 
     db_path: Path = field(default_factory=lambda: DATA_DIR / "predictor.sqlite3")
+    # simulated capital, open simulated positions and limit orders, kept across restarts (data/ is not in git)
+    paper_state_path: Path = field(default_factory=lambda: Path(os.getenv("PP_PAPER_STATE", DATA_DIR / "paper_state.json")))
 
 
 settings = Settings()
