@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# data, model cache, secrets
+data/
+*.sqlite3
+.env
+.env.*
+# Node
+frontend/node_modules/
+frontend/dist/
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
