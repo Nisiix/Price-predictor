@@ -15,6 +15,18 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
   onFocus: (s: string) => void; paused: boolean; pauseReason: string; board: Board | null; horizon: string;
 }) {
   const [q, setQ] = useState("");
+  const [sortBy, setSortBy] = useState<SortMode>(() => {
+    try {
+      const v = localStorage.getItem("pp.sort") as SortMode | null;
+      return v && SORTS.some(([k]) => k === v) ? v : "prob";
+    } catch {
+      return "prob";
+    }
+  });
+  const changeSort = (v: SortMode) => {
+    setSortBy(v);
+    try { localStorage.setItem("pp.sort", v); } catch { /* ignore */ }
+  };
   const byRank = useMemo(() => new Map(ranking.map((r) => [r.symbol, r])), [ranking]);
   const probs = board && board.h === horizon ? board.rows : {};
   const ready = Object.keys(probs).length;
@@ -23,15 +35,18 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
     return markets
       .map((m) => ({ s: m.symbol, m, r: byRank.get(m.symbol), b: probs[m.symbol] }))
       .filter((x) => !ql || x.m.base.toLowerCase().includes(ql) || x.m.name.toLowerCase().includes(ql))
-      // highest directional probability first; tokens still being computed go last, by market cap
-      .sort((a, b) => (b.b?.conf ?? -1) - (a.b?.conf ?? -1) || a.m.rank - b.m.rank);
-  }, [markets, byRank, probs, q]);
+      // tokens without the needed numbers go last, by market cap
+      .sort((a, b) => sortKey(b, sortBy) - sortKey(a, sortBy) || a.m.rank - b.m.rank);
+  }, [markets, byRank, probs, q, sortBy]);
 
   return (
     <div className="panel">
       <h2>
-        Token <small>{ready ? `ordinati per probabilità a ${horizonName(horizon)}` : `calcolo le probabilità a ${horizonName(horizon)}…`}</small>
+        Token <small>{ready ? `probabilità a ${horizonName(horizon)}` : `calcolo le probabilità a ${horizonName(horizon)}…`}</small>
       </h2>
+      <div className="tabs" role="group" aria-label="Ordina i token" style={{ padding: "0 8px" }}>
+        {SORTS.map(([k, l]) => <button key={k} aria-pressed={sortBy === k} onClick={() => changeSort(k)}>{l}</button>)}
+      </div>
       {ready > 0 && ready < markets.length && <p className="note" style={{ padding: "0 8px", margin: "0 0 6px" }}>{ready} di {markets.length} token già calcolati, gli altri arrivano a breve.</p>}
       {paused && <p className="note warn" style={{ padding: "0 8px" }}>Nuove aperture sospese: {pauseReason}</p>}
       <input className="search" placeholder="Cerca token" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Cerca token" />
@@ -52,7 +67,9 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
                   {price(p)}
                   {r && <span className={`side-tag ${r.side}`} title={`Checker: TP ${pct(r.kronos_p_tp)}, rischio ${pct(r.extra_risk)}`}>{r.side === "long" ? "Long" : "Short"} {r.leverage}x</span>}
                 </span>
-                <span className="score">{b ? (b.dir === "up" ? "rialzo" : "ribasso") : "in calcolo"}</span>
+                <span className="score" title="Rischio aggiuntivo stimato dal Checker">
+                  {r ? <span style={{ color: riskColor(r.extra_risk) }}>rischio {pct(r.extra_risk)}</span> : b ? "rischio in calcolo" : "in calcolo"}
+                </span>
               </button>
             </li>
           );
@@ -62,6 +79,17 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
     </div>
   );
 }
+
+type SortMode = "prob" | "risk" | "combo";
+const SORTS: [SortMode, string][] = [["prob", "Probabilità"], ["risk", "Rischio più basso"], ["combo", "Probabilità e rischio"]];
+type WlRow = { m: Market; r?: CheckerRow; b?: { conf: number } };
+function sortKey(x: WlRow, mode: SortMode): number {
+  const risk = x.r?.extra_risk;
+  if (mode === "risk") return risk == null ? -1 : 1 - risk;
+  if (mode === "combo") return x.b && risk != null ? x.b.conf * (1 - risk) : -1;
+  return x.b?.conf ?? -1;
+}
+const riskColor = (r: number) => (r > 0.5 ? "var(--short)" : r > 0.35 ? "var(--warn)" : "var(--long)");
 
 // ------------------------------------------------------------------ horizon ladder (signature)
 export function HorizonLadder({ snap, selected, onSelect }: { snap: Snapshot | undefined; selected: string; onSelect: (h: string) => void }) {
