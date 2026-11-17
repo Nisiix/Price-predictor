@@ -62,6 +62,8 @@ class Position:
     lev_move: float = 0.0  # gross leveraged price move (what TP/SL watch), %
     venue_order_id: str | None = None
     p_dir_now: float | None = None  # latest Kronos 4h probability of the position's direction
+    locked: bool = False  # stop moved into profit after the +5% leveraged gain
+    peak_lev_move: float = 0.0
     last_pred_ts: float = 0.0
     reverse_count: int = 0
 
@@ -244,13 +246,32 @@ class Executor:
         if m and m.funding_rate and p.mode == "paper":
             p.funding += p.side * p.notional * m.funding_rate * dt / (m.funding_period_h * 3600)
         self._mark(p, price)
+        p.peak_lev_move = max(p.peak_lev_move, p.lev_move)
         if (p.side > 0 and price <= p.liq) or (p.side < 0 and price >= p.liq):
             return "liquidazione"
         if (p.side > 0 and price <= p.sl) or (p.side < 0 and price >= p.sl):
-            return f"stop loss {-settings.stop_loss_pct:.0f}% (leva)"
+            if p.locked:
+                return f"stop di protezione +{settings.lock_profit_pct:g}% (leva)"
+            return f"stop loss {-settings.stop_loss_pct:g}% (leva)"
+        if not p.locked and p.lev_move >= settings.lock_trigger_pct:
+            self._lock_profit(p)
         if p.tp > 0 and ((p.side > 0 and price >= p.tp) or (p.side < 0 and price <= p.tp)):
             return f"take profit +{settings.take_profit_pct:.0f}% (leva)"
         return self._reversal(p)
+
+    def _lock_profit(self, p: Position) -> None:
+        """After +5% leveraged, move the stop to +2% leveraged profit (never below the current stop)."""
+        new_sl = p.entry * (1 + p.side * settings.lock_profit_pct / 100 / p.leverage)
+        if (p.side > 0 and new_sl <= p.sl) or (p.side < 0 and new_sl >= p.sl):
+            return
+        p.sl, p.locked = new_sl, True
+        self.bus.agent_log(
+            "Executor", f"{p.base}: raggiunto +{settings.lock_trigger_pct:g}% con leva, stop spostato a +{settings.lock_profit_pct:g}% di profitto ({new_sl:.6g})",
+            "success",
+        )
+        if p.mode == "real":
+            self._intent({"action": "update_sl", "position_id": p.id, "symbol": p.symbol,
+                          "side": "long" if p.side > 0 else "short", "qty": p.qty, "sl": new_sl})
 
     def _reversal(self, p: Position) -> str | None:
         """Close when the 4h forecast flips against the position, with a margin and confirmation
@@ -375,6 +396,9 @@ class Executor:
                 if p:
                     p.status = "open"
             return {"ok": True}
+        if intent["action"] == "update_sl":
+            self.bus.agent_log("Executor", f"Stop di protezione aggiornato anche sul mercato per {intent['symbol'].split('_')[1]}", "info")
+            return {"ok": True}
         if intent["action"] == "open":
             side = 1 if intent["side"] == "long" else -1
             p = self._make_position(intent["symbol"], side, intent["leverage"], intent["margin"], fill_price or intent["price"],
@@ -431,4 +455,5 @@ class Executor:
             "tp_pct": settings.take_profit_pct, "sl_pct": settings.stop_loss_pct,
             "use_tp": settings.use_take_profit, "exit_margin": settings.exit_margin,
             "exit_confirmations": settings.exit_confirmations, "entry_zone": settings.entry_zone,
+            "lock_trigger_pct": settings.lock_trigger_pct, "lock_profit_pct": settings.lock_profit_pct,
         }

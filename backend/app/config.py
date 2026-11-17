@@ -62,6 +62,8 @@ class Settings:
     exit_margin: float = _f("PP_EXIT_MARGIN", 0.10)  # reversal only if the opposite direction reaches 50% + margin
     exit_confirmations: int = _i("PP_EXIT_CONFIRM", 2)  # consecutive 4h forecasts confirming the reversal
     use_take_profit: bool = os.getenv("PP_USE_TP", "0") == "1"  # fixed +5% take profit (off: exit on reversal)
+    lock_trigger_pct: float = _f("PP_LOCK_TRIGGER", 5.0)  # once the leveraged gain reaches +5%...
+    lock_profit_pct: float = _f("PP_LOCK_PROFIT", 2.0)  # ...the stop moves to +2% leveraged profit
     analyst_close_threshold: float = _f("PP_ANALYST_CLOSE", 70.0)
     analyst_pause_threshold: float = _f("PP_ANALYST_PAUSE", 55.0)
     news_poll_s: int = _i("PP_NEWS_POLL_S", 120)

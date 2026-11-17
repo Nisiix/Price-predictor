@@ -236,6 +236,11 @@ export class OrderlyClient {
     });
   }
 
+  /** Cancel every pending algo order (TP/SL) on a symbol, e.g. before replacing the stop. */
+  cancelAlgoOrders(symbol: string) {
+    return this.signed("DELETE", `/v1/algo/orders?symbol=${symbol}`);
+  }
+
   cancelOrder(symbol: string, orderId: number) {
     return this.signed("DELETE", `/v1/order?order_id=${orderId}&symbol=${symbol}`);
   }

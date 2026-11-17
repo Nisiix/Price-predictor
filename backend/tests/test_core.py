@@ -198,3 +198,15 @@ def test_no_take_profit_by_default_and_reversal_exit():
     forecast(0.25, t0 + 2)  # second confirmation -> close
     r = ex._reversal(p)
     assert r and r.startswith("inversione")
+
+
+def test_profit_lock_moves_stop_to_plus_2_after_plus_5():
+    feed, ctl, ex = make()
+    p = open_long(ex, lev=10)
+    sl0 = p.sl
+    assert step(ex, feed, p.entry * 1.0051) is None  # +5.1% leveraged: lock, no exit
+    assert p.locked and p.sl > sl0
+    assert p.sl == pytest.approx(p.entry * 1.002)  # +2% leveraged at 10x = +0.2% price
+    r = step(ex, feed, p.entry * 1.0019)  # back below the lock level
+    assert r.startswith("stop di protezione")
+    assert ctl.trades[-1].lev_move > 0  # closed in profit (gross)

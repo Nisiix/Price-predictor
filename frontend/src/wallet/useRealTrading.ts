@@ -212,9 +212,16 @@ export function useRealTrading(executor: ExecutorView | null, markets: Market[])
         let sent = false;
         try {
           if (it.action === "open") {
-            const r = await openReal({ symbol: it.symbol, side: it.side, leverage: it.leverage!, margin: it.margin!, type: "MARKET", tp: it.tp, sl: it.sl });
+            const r = await openReal({ symbol: it.symbol, side: it.side, leverage: it.leverage!, margin: it.margin!, type: "MARKET", tp: it.tp ?? undefined, sl: it.sl });
             sent = true;
             await postJSON("/api/real/ack", { intent_id: it.id, ok: true, fill_price: r.fill, qty: r.qty, order_id: r.orderId });
+          } else if (it.action === "update_sl") {
+            // move the venue stop into profit: replace the position TP/SL with the new stop
+            await client!.cancelAlgoOrders(it.symbol).catch(() => {});
+            const m = marketsRef.current.find((x) => x.symbol === it.symbol);
+            await client!.positionTpSl(it.symbol, it.side === "long", undefined, m ? roundPrice(it.sl!, m.quote_tick) : it.sl);
+            sent = true;
+            await postJSON("/api/real/ack", { intent_id: it.id, ok: true });
           } else {
             const px = await closeReal(it.symbol);
             await postJSON("/api/real/ack", { intent_id: it.id, ok: true, fill_price: px });
