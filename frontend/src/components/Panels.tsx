@@ -3,10 +3,7 @@ import type { AnalystView, Board, CheckerRow, ExecutorView, HorizonStat, LogEntr
 import { ago, pct, postJSON, price, signed, usd } from "../api";
 
 const HORIZON_ORDER = ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h"];
-export const HORIZON_CHOICES: [string, string][] = [
-  ["5s", "5 secondi"], ["10s", "10 secondi"], ["30s", "30 secondi"], ["1m", "1 minuto"],
-  ["15m", "15 minuti"], ["30m", "30 minuti"], ["1h", "1 ora"],
-];
+export const HORIZON_CHOICES: [string, string][] = [["15m", "15 minuti"], ["30m", "30 minuti"], ["1h", "1 ora"]];
 export const horizonName = (h: string) => HORIZON_CHOICES.find(([k]) => k === h)?.[1] ?? h;
 
 // ------------------------------------------------------------------ watchlist (Checker ranking)

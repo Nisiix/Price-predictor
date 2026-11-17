@@ -20,7 +20,7 @@ export default function App() {
   const [horizon, setHorizon] = useState<string>(() => {
     try {
       const h = localStorage.getItem("pp.horizon");
-      return h && HORIZON_TF[h] ? h : "15m";
+      return h && HORIZON_CHOICES.some(([k]) => k === h) ? h : "15m";
     } catch {
       return "15m";
     }
