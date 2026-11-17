@@ -70,12 +70,18 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
     const end = bars.length - Math.min(offset, maxOffset);
     const shown = bars.slice(Math.max(0, end - visible), end);
     const live = offset === 0;
-    const futN = live && fan ? fan.q50.length : 0;
+    const lastT = shown.length ? shown[shown.length - 1][0] : 0;
+    // where a forecast step sits, by its timestamp: slot of the candle opening at time t
+    const slotOfT = (t: number) => shown.length - 1 + (t - lastT) / tfSeconds;
+    const fanOn = live && fan && fan.t.length > 0 && shown.length > 0;
+    const futN = fanOn ? fan!.q50.length : 0;
+    // free slots needed on the right: from the current candle to the last forecast step
+    const futSlots = fanOn ? Math.max(0, Math.ceil(slotOfT(fan!.t[futN - 1]) - (shown.length - 1))) : 0;
     // slots are fixed by the zoom level, not by how many candles exist
-    const slots = Math.max(visible, shown.length) + futN + 1;
+    const slots = Math.max(visible, shown.length) + futSlots + 1;
     const plotW = w - PAD.l - PAD.r;
     const step = plotW / slots;
-    const firstSlot = slots - futN - 1 - shown.length; // right-align candles next to the cone
+    const firstSlot = slots - futSlots - 1 - shown.length; // right-align candles next to the cone
     let lo = Infinity, hi = -Infinity;
     for (const b of shown) { lo = Math.min(lo, b[3]); hi = Math.max(hi, b[2]); }
     if (fan && futN) for (let i = 0; i < futN; i++) { lo = Math.min(lo, fan.q10[i]); hi = Math.max(hi, fan.q90[i]); }
@@ -89,10 +95,10 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
     const x = (i: number) => PAD.l + (firstSlot + i + 0.5) * step;
     const yInv = (py: number) => lo + (1 - (py - PAD.t) / (H - PAD.t - PAD.b)) * (hi - lo);
     const slotAt = (px: number) => Math.round((px - PAD.l) / step - firstSlot - 0.5); // candle index (>= shown.length: future)
-    return { shown, futN, step, lo, hi, y, x, live, yInv, slotAt };
-  }, [bars, fan, levels, w, visible, offset, maxOffset]);
+    return { shown, futN, futSlots, step, lo, hi, y, x, live, yInv, slotAt, slotOfT };
+  }, [bars, fan, levels, w, visible, offset, maxOffset, tfSeconds]);
 
-  const { shown, futN, step, lo, hi, y, x, live, yInv, slotAt } = view;
+  const { shown, futN, futSlots, step, lo, hi, y, x, live, yInv, slotAt, slotOfT } = view;
   const [hover, setHover] = useState<{ px: number; py: number } | null>(null);
   const last = shown.length ? shown[shown.length - 1] : null;
   const nowX = shown.length ? x(shown.length - 1) : PAD.l;
@@ -100,9 +106,12 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
 
   let cone: ReactElement | null = null;
   if (fan && last && futN) {
-    const xs = [nowX, ...fan.q50.map((_, i) => x(shown.length + i))];
+    // Each forecast step is drawn at its own time (the close of the candle it predicts). The cone starts at the
+    // close of the last candle Kronos saw, at the price it forecast from: if the forecast is a few candles old,
+    // the cone starts a few candles back and you see how the price actually moved against it.
+    const originT = fan.t[0] - tfSeconds;
+    const xs = [x(slotOfT(originT) + 0.5), ...fan.t.map((t) => x(slotOfT(t) + 0.5))];
     const band = (a: number[], b: number[]) => {
-      // start the cone at the price Kronos forecast from (it may differ from the live candle if the forecast is older)
       const top = [fan.anchor, ...b].map((v, i) => `${xs[i]},${y(v)}`);
       const bot = [fan.anchor, ...a].map((v, i) => `${xs[i]},${y(v)}`).reverse();
       return [...top, ...bot].join(" ");
@@ -155,7 +164,7 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
   let info: ReactElement | null = null;
   if (hover && !drag.current) {
     const i = slotAt(hover.px);
-    const cx = x(Math.max(0, Math.min(i, shown.length + Math.max(futN, 1) - 1)));
+    const cx = x(Math.max(0, Math.min(i, shown.length + Math.max(futSlots, 1) - 1)));
     const hoverPrice = yInv(hover.py);
     let t: number | null = null;
     if (i >= 0 && i < shown.length) {
@@ -169,12 +178,13 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
           <span className={chg >= 0 ? "long" : "short"}>{chg >= 0 ? "+" : ""}{chg.toFixed(2)}%</span>
         </div>
       );
-    } else if (fan && i >= shown.length && i - shown.length < futN && last) {
-      const k = i - shown.length;
-      t = last[0] + (k + 1) * tfSeconds;
-      info = (
+    } else if (fan && i >= shown.length && last && futN) {
+      t = last[0] + (i - (shown.length - 1)) * tfSeconds;
+      const k = Math.round((t - fan.t[0]) / tfSeconds);
+      if (k < 0 || k >= futN) t = null;
+      if (t != null) info = (
         <div className="ohlc kronos">
-          <span>Kronos tra {fmtDur((k + 1) * tfSeconds)}</span>
+          <span>Kronos, candela delle {fmtTime(t)}</span>
           <span>mediana <b>{price(fan.q50[k])}</b></span>
           <span>50%: <b>{price(fan.q25[k])}</b> – <b>{price(fan.q75[k])}</b></span>
           <span>80%: <b>{price(fan.q10[k])}</b> – <b>{price(fan.q90[k])}</b></span>
@@ -221,7 +231,7 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
             </g>
           );
         })}
-        {futN > 0 && <rect x={nowX + step / 2} y={PAD.t} width={Math.max(0, w - PAD.r - nowX - step / 2)} height={H - PAD.t - PAD.b} fill="var(--kronos)" opacity={0.035} />}
+        {futSlots > 0 && <rect x={nowX + step / 2} y={PAD.t} width={Math.max(0, w - PAD.r - nowX - step / 2)} height={H - PAD.t - PAD.b} fill="var(--kronos)" opacity={0.035} />}
         {shown.map((b, i) => {
           const up = b[4] >= b[1];
           const c = up ? "var(--long)" : "var(--short)";
@@ -251,8 +261,8 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
           </g>
         )}
         {timeTicks.map((i) => <text key={i} x={x(i) - 14} y={H - 6}>{fmtTime(shown[i][0])}</text>)}
-        {fan && futN > 0 && (
-          <text x={x(shown.length + futN - 1) - 30} y={H - 6} style={{ fill: "var(--kronos)" }}>+{fmtDur(futN * tfSeconds)}</text>
+        {fan && futN > 0 && last && (
+          <text x={x(slotOfT(fan.t[futN - 1]) + 0.5) - 30} y={H - 6} style={{ fill: "var(--kronos)" }}>fino alle {fmtTime(fan.t[futN - 1] + tfSeconds)}</text>
         )}
         {crosshair}
         {shown.length < 3 && (

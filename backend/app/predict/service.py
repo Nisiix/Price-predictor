@@ -74,10 +74,13 @@ class PredictionService:
     # ------------------------------------------------------------------ core
     def _run_tf(self, sym: str, tf: str, engine: KronosEngine | None = None) -> dict | None:
         engine = engine or self.engine
-        bars = self.feed.store.get(sym, tf, settings.lookback)
+        sec = TIMEFRAMES[tf]
+        bars = self.feed.store.get(sym, tf, settings.lookback + 1)
+        if len(bars) and bars[-1, 0] + sec > time.time():
+            bars = bars[:-1]  # the last candle is still forming: Kronos sees only closed candles
+        bars = bars[-settings.lookback:]
         if len(bars) < MIN_BARS[tf]:
             return None
-        sec = TIMEFRAMES[tf]
         pred_len = PRED_LEN[tf]
         ts = pd.to_datetime(bars[:, 0], unit="s")
         fut = pd.to_datetime(bars[-1, 0] + sec * np.arange(1, pred_len + 1), unit="s")
@@ -171,7 +174,7 @@ class PredictionService:
 
         for sym in list(self.focus):
             for tf in ("1m", "5m", "15m"):  # sub-minute horizons are no longer shown on the dashboard
-                if stale(sym, tf, MAX_AGE[tf] * self.factor) and self.feed.store.count(sym, tf) >= MIN_BARS[tf]:
+                if stale(sym, tf, MAX_AGE[tf] * min(self.factor, 2.0)) and self.feed.store.count(sym, tf) >= MIN_BARS[tf]:
                     return sym, tf
         for sym in list(self.priority):
             # open positions: keep the 4h forecast fresh for the exits, with the large model when loaded
