@@ -112,6 +112,7 @@ async def same_origin_only(request, call_next):
 def system_status() -> dict:
     return {
         "feed": feed.status, "last_tick": feed.last_tick_ts, "markets": len(feed.markets),
+        "active": predictor.active_symbols(),
         "kronos": predictor.status(), "checker": {"paused": checker.paused, "reason": checker.pause_reason if checker.paused else "",
                                                   "ranked": len(checker.ranking), "signals": len(checker.signals())},
         "analyst": {"risk": analyst.risk, "status": analyst.status}, "executor": {"mode": executor.mode},

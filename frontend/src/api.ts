@@ -52,7 +52,7 @@ export type Group = { key: string; n: number; wins: number; win_rate: number; pn
 export type Report = { summary: Group; groups: Record<string, Group[]>; insights: string[]; calibration: { label: string; n: number; hit_rate: number; brier: number }[]; recent: any[] };
 export type LogEntry = { agent: string; text: string; level: string; ts: number; url?: string };
 export type System = {
-  feed: string; last_tick: number; markets: number; uptime: number;
+  feed: string; last_tick: number; markets: number; uptime: number; active?: string[];
   kronos: { model: string; ready: boolean; error: string | null; device: string; latency: number; busy: string | null; inferences: number; samples: number; scanned: number; decision_model?: string; decision_ready?: boolean; model_key?: string; switching?: string | null; models?: string[] };
   checker: { paused: boolean; reason: string; ranked: number; signals: number }; analyst: { risk: number; status: string }; executor: { mode: string };
 };

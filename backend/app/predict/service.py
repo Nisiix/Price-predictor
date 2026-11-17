@@ -23,6 +23,8 @@ MODELS = {
     "mini": ("NeoQuasar/Kronos-mini", "NeoQuasar/Kronos-Tokenizer-2k", 2048, 1.0),
     "base": ("NeoQuasar/Kronos-base", "NeoQuasar/Kronos-Tokenizer-base", 512, 6.0),  # ~20x slower on CPU
 }
+# user rule: how many tokens (by market cap) each model analyses; None = the whole universe
+MODEL_UNIVERSE = {"mini": 12, "base": None}
 MODEL_FILE = DATA_DIR / "model.json"
 
 
@@ -114,6 +116,12 @@ class PredictionService:
             "trade": trade,
         }
 
+    def active_symbols(self) -> list[str]:
+        """Tokens analysed with the current model: the first N by market cap (mini: 12, base: all)."""
+        ranked = sorted(self.feed.markets.values(), key=lambda m: m.rank)
+        n = MODEL_UNIVERSE.get(self.model_key)
+        return [m.symbol for m in (ranked[:n] if n else ranked)]
+
     @property
     def factor(self) -> float:
         """Refresh intervals scale with the model's CPU cost."""
@@ -182,7 +190,7 @@ class PredictionService:
         return None
 
     def _scan(self, tf: str, age: float, kind: str, stale) -> tuple[str, str] | None:
-        syms = [s for s in self.feed.markets if self.feed.store.count(s, tf) >= MIN_BARS[tf]]
+        syms = [s for s in self.active_symbols() if self.feed.store.count(s, tf) >= MIN_BARS[tf]]
         if not syms:
             return None
         attr = "_rr_board" if kind == "board" else "_rr"
@@ -251,7 +259,7 @@ class PredictionService:
         secs, tf, step = HORIZONS[label]
         rows = {}
         now = time.time()
-        for sym in self.feed.markets:
+        for sym in self.active_symbols():
             c = self.cache.get((sym, tf))
             if not c:
                 continue
@@ -283,7 +291,8 @@ class PredictionService:
             "decision_error": self.decider.error if self.decider else None,
             "device": self.engine.device, "latency": self.engine.last_latency_s, "busy": self.busy_with,
             "inferences": self.inferences, "samples": settings.n_samples, "lookback": settings.lookback,
-            "scanned": sum(1 for (s, tf) in self.cache if tf == "1m"),
+            "scanned": len({s for (s, tf) in self.cache if tf == "15m"} & set(self.active_symbols())),
+            "active": len(self.active_symbols()),
         }
 
 

@@ -164,7 +164,7 @@ export default function App() {
             {sys?.kronos.switching && <span className="faint">carico {sys.kronos.switching}…</span>}
           </span>
           <span className="chip"><span className={`dot ${sys?.kronos.ready ? "ok" : sys?.kronos.error ? "bad" : "warn"}`} />
-            {sys?.kronos.ready ? <>Kronos <b>{sys.kronos.model.split("/")[1]}</b>{sys.kronos.decision_model ? <> + <b title="Usato per le decisioni dell'Executor: ricalcolo prima dell'ingresso e uscite">{sys.kronos.decision_model.split("/")[1]}</b>{sys.kronos.decision_ready ? "" : " (in caricamento)"}</> : null} · {sys.kronos.scanned}/{sys.markets} token</> : sys?.kronos.error ? "Kronos non disponibile, stima statistica" : "Kronos in caricamento"}
+            {sys?.kronos.ready ? <>Kronos <b>{sys.kronos.model.split("/")[1]}</b>{sys.kronos.decision_model ? <> + <b title="Usato per le decisioni dell'Executor: ricalcolo prima dell'ingresso e uscite">{sys.kronos.decision_model.split("/")[1]}</b>{sys.kronos.decision_ready ? "" : " (in caricamento)"}</> : null} · {sys.kronos.scanned}/{sys.active?.length ?? sys.markets} token</> : sys?.kronos.error ? "Kronos non disponibile, stima statistica" : "Kronos in caricamento"}
           </span>
           <span className="chip"><span className={`dot ${(sys?.analyst.risk ?? 0) >= 70 ? "bad" : (sys?.analyst.risk ?? 0) >= 55 ? "warn" : "ok"}`} />Rischio macro <b>{(sys?.analyst.risk ?? 0).toFixed(0)}</b></span>
           <span className="chip"><span className={`dot ${live.executor?.mode === "real" ? "warn" : "ok"}`} />{live.executor?.mode === "real" ? <b>Trading reale attivo</b> : "Executor in simulazione"}</span>
@@ -181,7 +181,7 @@ export default function App() {
       {page === "market" ? (
         <main className="desk">
           <aside className="watch">
-            <Watchlist markets={live.markets} ranking={live.ranking} prices={live.prices} focus={focus} onFocus={setFocus} paused={live.paused} pauseReason={live.pauseReason} board={live.boards[horizon] ?? null} horizon={horizon} />
+            <Watchlist markets={sys?.active ? live.markets.filter((m) => sys.active!.includes(m.symbol)) : live.markets} ranking={live.ranking} prices={live.prices} focus={focus} onFocus={setFocus} paused={live.paused} pauseReason={live.pauseReason} board={live.boards[horizon] ?? null} horizon={horizon} />
           </aside>
 
           <section className="main">

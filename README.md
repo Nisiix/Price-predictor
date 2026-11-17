@@ -51,7 +51,7 @@ Tutto è modificabile con variabili d'ambiente (vedi `backend/app/config.py`):
 
 | Variabile | Default | Significato |
 |---|---|---|
-| Selettore "Modello" in alto | base | passa tra Kronos-mini (veloce) e Kronos-base (più preciso, circa 20 volte più lento su CPU) senza riavviare; la scelta resta salvata in `data/model.json` |
+| Selettore "Modello" in alto | base | passa tra Kronos-mini (veloce) e Kronos-base (più preciso, circa 20 volte più lento su CPU) senza riavviare; con mini si analizzano i primi 12 token per capitalizzazione, con base tutti e 36; la scelta resta salvata in `data/model.json` |
 | `PP_KRONOS_MODEL` / `PP_KRONOS_TOKENIZER` | `NeoQuasar/Kronos-mini` / `NeoQuasar/Kronos-Tokenizer-2k` | `NeoQuasar/Kronos-small` con `Kronos-Tokenizer-base` è più accurato ma circa 3,5 volte più lento su CPU |
 | `PP_SAMPLES` | 24 | futuri campionati per previsione |
 | `PP_LOOKBACK` | 128 | candele passate date al modello |

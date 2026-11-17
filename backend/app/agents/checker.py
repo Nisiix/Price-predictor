@@ -218,7 +218,7 @@ class Checker:
             try:
                 await asyncio.to_thread(self._refresh_library15)
                 rows = []
-                for sym in list(self.feed.markets):
+                for sym in self.predictor.active_symbols():  # mini: top 12, base: all
                     r = await asyncio.to_thread(self.evaluate, sym)
                     if r:
                         rows.append(r)
