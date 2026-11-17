@@ -520,6 +520,15 @@ class Executor:
                 if fresh:
                     self.predictor.cache[(sym, "15m")] = fresh
             new = await asyncio.to_thread(self.checker.evaluate, sym)
+            if new and not new["eligible"] and not new["entry_ok"] and new["dip_price"] < sig["dip_price"]:
+                # the fresh forecast sees a further drop: same logic again with the new, lower entry point
+                # (no cooldown: the Checker keeps watching and the next approach triggers a new re-prediction)
+                self.bus.agent_log(
+                    "Executor",
+                    f"{sig['base']}: la nuova previsione vede un ulteriore ribasso, nuovo punto d'ingresso "
+                    f"{new['dip_price']:.6g} (prima {sig['dip_price']:.6g}), attendo che il prezzo ci arrivi", "info",
+                )
+                return
             if not new or not new["eligible"]:
                 why = ", ".join(new["reasons"]) if new else "previsione non disponibile"
                 self.cooldown[sym] = time.time() + 180
