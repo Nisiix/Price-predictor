@@ -236,7 +236,7 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
         </div>
       )}
       <p className="note" style={{ marginTop: 8 }}>
-        L'Executor apre solo long, quando la probabilità di rialzo supera il 70% sia a 4 sia a 8 ore (il rischio decide la leva) e il prezzo arriva al punto più basso previsto da Kronos; prima di entrare ricalcola la previsione e rinvia se ne vede un ribasso ulteriore; i token con un calo oltre il 5% in 4, 8 o 12 ore hanno la precedenza:
+        L'Executor apre solo long, quando la probabilità di rialzo a 4 ore supera il 70% e il trend a 8 ore è al rialzo (il rischio decide la leva) e il prezzo arriva al punto più basso previsto da Kronos; prima di entrare ricalcola la previsione e rinvia se ne vede un ribasso ulteriore; i token con un calo oltre il 5% in 4, 8 o 12 ore hanno la precedenza:
         vicino al minimo delle ultime 4 ore per un long, vicino al massimo per uno short. Seleziona una riga per l'analisi completa.
       </p>
     </div>

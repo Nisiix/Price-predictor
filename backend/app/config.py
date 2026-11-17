@@ -67,7 +67,7 @@ class Settings:
     drop_priority_pct: float = _f("PP_DROP_PRIORITY", 5.0)  # >5% drop in 4/8/12 h moves a token up the opening queue
     entry_zone: float = _f("PP_ENTRY_ZONE", 0.20)
     zone_bypass_risk: float = _f("PP_ZONE_BYPASS_RISK", 0.35)  # (superseded by the predicted entry point)
-    min_confidence_8h: float = _f("PP_MIN_CONF_8H", 0.70)  # the 8h forecast must also be long above this
+    min_confidence_8h: float = _f("PP_MIN_CONF_8H", 0.50)  # 8h only confirms the trend is up (> 50%); the 70% is on 4h
     entry_tolerance: float = _f("PP_ENTRY_TOL", 0.002)  # enter within 0.2% of the predicted low point  # long in the lowest 20% of the 4h range, short in the highest 20%
     exit_margin: float = _f("PP_EXIT_MARGIN", 0.10)  # reversal only if the opposite direction reaches 50% + margin
     exit_confirmations: int = _i("PP_EXIT_CONFIRM", 2)  # consecutive 4h forecasts confirming the reversal

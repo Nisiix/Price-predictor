@@ -141,7 +141,8 @@ class Checker:
             reasons.append("punteggio sotto soglia")
         zone_bypass = False  # the 4h-range zone is replaced by the predicted entry point
         if side > 0 and p_up_8h <= settings.min_confidence_8h:
-            reasons.append(f"previsione a 8 ore non oltre il {settings.min_confidence_8h * 100:.0f}% di rialzo")
+            reasons.append("trend a 8 ore non al rialzo" if settings.min_confidence_8h <= 0.5
+                           else f"previsione a 8 ore non oltre il {settings.min_confidence_8h * 100:.0f}% di rialzo")
         if side > 0 and not entry_ok:
             reasons.append(f"in attesa del punto d'ingresso previsto ({dip_price:.6g}, tra circa {(dip_step + 1) * 15} min)")
         costs = 2 * (settings.taker_fee + settings.slippage)
