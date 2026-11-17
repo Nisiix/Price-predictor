@@ -87,10 +87,13 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
     lo -= padY; hi += padY;
     const y = (v: number) => PAD.t + (1 - (v - lo) / (hi - lo)) * (H - PAD.t - PAD.b);
     const x = (i: number) => PAD.l + (firstSlot + i + 0.5) * step;
-    return { shown, futN, step, lo, hi, y, x, live };
+    const yInv = (py: number) => lo + (1 - (py - PAD.t) / (H - PAD.t - PAD.b)) * (hi - lo);
+    const slotAt = (px: number) => Math.round((px - PAD.l) / step - firstSlot - 0.5); // candle index (>= shown.length: future)
+    return { shown, futN, step, lo, hi, y, x, live, yInv, slotAt };
   }, [bars, fan, levels, w, visible, offset, maxOffset]);
 
-  const { shown, futN, step, lo, hi, y, x, live } = view;
+  const { shown, futN, step, lo, hi, y, x, live, yInv, slotAt } = view;
+  const [hover, setHover] = useState<{ px: number; py: number } | null>(null);
   const last = shown.length ? shown[shown.length - 1] : null;
   const nowX = shown.length ? x(shown.length - 1) : PAD.l;
   const bw = Math.max(1.5, Math.min(MAX_CANDLE, step * 0.66));
@@ -114,7 +117,7 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
           <g>
             <line x1={xs[markStep]} x2={xs[markStep]} y1={PAD.t} y2={H - PAD.b} stroke="var(--kronos)" strokeWidth={1} strokeDasharray="3 3" opacity={0.8} />
             <circle cx={xs[markStep]} cy={y(fan.q50[markStep - 1])} r={5} fill="var(--ink)" stroke="var(--kronos)" strokeWidth={2} />
-            <text x={xs[markStep] + 6} y={PAD.t + 12} style={{ fill: "var(--kronos)", fontWeight: 600 }}>{markLabel}: {price(fan.q50[markStep - 1])}</text>
+            <text x={xs[markStep] + 6} y={PAD.t + 34} style={{ fill: "var(--kronos)", fontWeight: 600 }}>{markLabel}: {price(fan.q50[markStep - 1])}</text>
           </g>
         )}
       </g>
@@ -134,15 +137,68 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
     (e.target as Element).setPointerCapture?.(e.pointerId);
   };
   const onPointerMove = (e: React.PointerEvent) => {
+    const r = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+    const px = e.clientX - r.left;
+    const py = e.clientY - r.top;
+    setHover(px >= PAD.l && px <= w - PAD.r && py >= PAD.t && py <= H - PAD.b ? { px, py } : null);
     if (!drag.current) return;
     const dBars = Math.round((e.clientX - drag.current.x) / Math.max(step, 1));
     if (dBars) setCustom(true);
     setOffset(Math.max(0, Math.min(maxOffset, drag.current.offset + dBars)));
   };
   const onPointerUp = () => { drag.current = null; };
+  const onPointerLeave = () => { drag.current = null; setHover(null); };
+
+  // crosshair: price at the cursor row, time (and candle or Kronos values) at the cursor column
+  let crosshair: ReactElement | null = null;
+  let info: ReactElement | null = null;
+  if (hover && !drag.current) {
+    const i = slotAt(hover.px);
+    const cx = x(Math.max(0, Math.min(i, shown.length + Math.max(futN, 1) - 1)));
+    const hoverPrice = yInv(hover.py);
+    let t: number | null = null;
+    if (i >= 0 && i < shown.length) {
+      const b = shown[i];
+      t = b[0];
+      const chg = b[1] ? (b[4] / b[1] - 1) * 100 : 0;
+      info = (
+        <div className="ohlc">
+          <span>{fmtTime(b[0])}</span>
+          <span>A <b>{price(b[1])}</b></span><span>M <b>{price(b[2])}</b></span><span>m <b>{price(b[3])}</b></span><span>C <b>{price(b[4])}</b></span>
+          <span className={chg >= 0 ? "long" : "short"}>{chg >= 0 ? "+" : ""}{chg.toFixed(2)}%</span>
+        </div>
+      );
+    } else if (fan && i >= shown.length && i - shown.length < futN && last) {
+      const k = i - shown.length;
+      t = last[0] + (k + 1) * tfSeconds;
+      info = (
+        <div className="ohlc kronos">
+          <span>Kronos tra {fmtDur((k + 1) * tfSeconds)}</span>
+          <span>mediana <b>{price(fan.q50[k])}</b></span>
+          <span>50%: <b>{price(fan.q25[k])}</b> – <b>{price(fan.q75[k])}</b></span>
+          <span>80%: <b>{price(fan.q10[k])}</b> – <b>{price(fan.q90[k])}</b></span>
+        </div>
+      );
+    }
+    crosshair = (
+      <g pointerEvents="none">
+        <line x1={PAD.l} x2={w - PAD.r} y1={hover.py} y2={hover.py} stroke="var(--muted)" strokeDasharray="4 4" strokeWidth={1} />
+        <line x1={cx} x2={cx} y1={PAD.t} y2={H - PAD.b} stroke="var(--muted)" strokeDasharray="4 4" strokeWidth={1} />
+        <rect x={w - PAD.r + 2} y={hover.py - 9} width={PAD.r - 4} height={18} rx={4} fill="var(--hull-2)" stroke="var(--muted)" />
+        <text x={w - PAD.r + 6} y={hover.py + 4} style={{ fill: "var(--text)", fontWeight: 600 }}>{price(hoverPrice)}</text>
+        {t != null && (
+          <g>
+            <rect x={cx - 44} y={H - PAD.b + 3} width={88} height={18} rx={4} fill="var(--hull-2)" stroke="var(--muted)" />
+            <text x={cx} y={H - PAD.b + 16} textAnchor="middle" style={{ fill: "var(--text)" }}>{fmtTime(t)}</text>
+          </g>
+        )}
+      </g>
+    );
+  }
 
   return (
     <div ref={ref} className="chartwrap">
+      {info}
       <div className="zoombar" role="group" aria-label="Zoom del grafico">
         <button className="ghost" onClick={() => zoom(1 / 1.4)} aria-label="Ingrandisci" title="Ingrandisci (rotella in su)">+</button>
         <button className="ghost" onClick={() => zoom(1.4)} aria-label="Riduci" title="Riduci (rotella in giù)">−</button>
@@ -152,8 +208,8 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
       </div>
       <svg
         className="chart" width={w} height={H} role="img" aria-label="Grafico a candele con il cono di previsione di Kronos"
-        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp}
-        style={{ cursor: drag.current ? "grabbing" : "grab", touchAction: "pan-y" }}
+        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerLeave}
+        style={{ cursor: drag.current ? "grabbing" : "crosshair", touchAction: "pan-y" }}
       >
         {Array.from({ length: 5 }, (_, i) => {
           const v = lo + ((i + 0.5) / 5) * (hi - lo);
@@ -197,6 +253,7 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
         {fan && futN > 0 && (
           <text x={x(shown.length + futN - 1) - 30} y={H - 6} style={{ fill: "var(--kronos)" }}>+{fmtDur(futN * tfSeconds)}</text>
         )}
+        {crosshair}
         {shown.length < 3 && (
           <text x={PAD.l + 12} y={PAD.t + 24} style={{ fill: "var(--muted)", fontSize: 13 }}>Storico delle candele in caricamento…</text>
         )}
