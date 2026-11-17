@@ -16,12 +16,14 @@ export type Snapshot = {
   symbol: string; horizons: Record<string, HorizonStat | null>; fans: Record<string, Fan>;
   trade: { best: TradeOption; options: TradeOption[] } | null; checker?: CheckerRow & { indicators: any; analogs: any; risk_parts: Record<string, number>; options: TradeOption[] };
 };
+export type HorizonPick = { h: string; side: "long" | "short"; conf: number; risk: number; score: number; age: number };
 export type CheckerRow = {
   symbol: string; base: string; name: string; rank: number; price: number; change_24h: number; side: "long" | "short";
   leverage: number; kronos_p_tp: number; kronos_p_sl: number; kronos_p_liq: number; ev: number; combined_prob: number;
   extra_risk: number; score: number; eligible: boolean; reasons: string[]; source: string; max_leverage: number;
   rsi: number; regime: string; flags: string[]; ind_score: number; analog_win: number | null; analog_n: number;
   p_up_4h: number; conf_4h: number; range_pos: number; in_zone: boolean;
+  horizons: HorizonPick[]; best_h: HorizonPick | null;
 };
 export type Position = {
   id: string; symbol: string; base: string; side: "long" | "short"; leverage: number; margin: number; entry: number;

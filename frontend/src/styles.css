@@ -281,3 +281,6 @@ table.t tr.cur td:first-child { box-shadow: inset 3px 0 0 var(--kronos); }
 .rangebar .zone.long { background: var(--long-deep); }
 .rangebar .zone.short { background: var(--short-deep); }
 .rangebar .dotp { position: absolute; top: -3px; width: 4px; height: 14px; border-radius: 2px; background: var(--text); transform: translateX(-2px); }
+
+.wl .besth { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); border-top: 1px dashed var(--line-soft); padding-top: 4px; margin-top: 2px; }
+.wl .besth b { color: var(--kronos); font-weight: 600; }

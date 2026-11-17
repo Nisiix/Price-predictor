@@ -36,7 +36,7 @@ class PredictionService:
         self._rr = 0
         self._rr_board = 0
         self._turn = 0
-        self.board_horizons: set[str] = {"15m", "4h"}  # 4h always (Executor strategy) + what dashboards show
+        self.board_horizons: set[str] = {"1h", "4h"}  # always: 4h (Executor) and 1h (best-horizon per token)
         self.calib = Calibration()
         self.busy_with: str | None = None
         self.inferences = 0

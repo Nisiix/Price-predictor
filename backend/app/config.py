@@ -55,9 +55,9 @@ class Settings:
 
     # --- checker / analyst ------------------------------------------------------
     # 4-hour strategy (Checker selection + Executor entry/exit)
-    min_signal_score: float = _f("PP_MIN_SCORE", 0.35)  # probability x (1 - risk) on the 4h horizon
-    min_confidence: float = _f("PP_MIN_CONF", 0.60)  # Kronos probability of the predicted 4h direction
-    max_risk: float = _f("PP_MAX_RISK", 0.55)  # extra risk ceiling
+    min_signal_score: float = _f("PP_MIN_SCORE", 0.0)  # probability x (1 - risk); 0 = off (user: ignore risk for entries)
+    min_confidence: float = _f("PP_MIN_CONF", 0.70)  # Kronos 4h probability must be ABOVE this (user rule: > 70%)
+    max_risk: float = _f("PP_MAX_RISK", 1.0)  # extra risk ceiling; 1 = off (risk only sets the leverage)
     entry_zone: float = _f("PP_ENTRY_ZONE", 0.20)  # long in the lowest 20% of the 4h range, short in the highest 20%
     exit_margin: float = _f("PP_EXIT_MARGIN", 0.10)  # reversal only if the opposite direction reaches 50% + margin
     exit_confirmations: int = _i("PP_EXIT_CONFIRM", 2)  # consecutive 4h forecasts confirming the reversal

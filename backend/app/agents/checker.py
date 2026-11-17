@@ -121,8 +121,8 @@ class Checker:
         lev = self._leverage(extra_risk, m.max_leverage)
 
         reasons = []
-        if conf < settings.min_confidence:
-            reasons.append(f"probabilità a 4 ore sotto il {settings.min_confidence * 100:.0f}%")
+        if conf <= settings.min_confidence:
+            reasons.append(f"probabilità a 4 ore non oltre il {settings.min_confidence * 100:.0f}%")
         if extra_risk > settings.max_risk:
             reasons.append("rischio aggiuntivo alto")
         if score < settings.min_signal_score:
@@ -130,6 +130,30 @@ class Checker:
         if not in_zone:
             reasons.append("in attesa: prezzo lontano dal " + ("minimo" if side > 0 else "massimo") + " delle 4 ore")
         eligible = not reasons
+
+        # same risk model on every dashboard horizon: which one has the best probability with the lowest risk
+        per_h = []
+        for h in ("15m", "30m", "1h", "4h"):
+            _, tf, st = HORIZONS[h]
+            ch = self.predictor.cache.get((sym, tf))
+            if not ch:
+                continue
+            cl = ch["paths"][:, st - 1, 3]
+            pu = float((cl > ch["last"]).mean())
+            sd = 1 if pu >= 0.5 else -1
+            cf = max(pu, 1 - pu)
+            pat = (ana["fwd_up"] if sd > 0 else 1 - ana["fwd_up"]) if ana.get("n") else None
+            parts = {
+                "kronos_avverso": 1 - cf,
+                "indicatori_contrari": 1 - (1 + sd * ind["score"]) / 2,
+                "pattern_storici": (1 - pat) if pat is not None else 0.5,
+                "volatilita": risk_parts["volatilita"],
+                "macro_analyst": risk_parts["macro_analyst"],
+            }
+            rk = float(sum(parts[k] * w for k, w in weights.items()))
+            per_h.append({"h": h, "side": "long" if sd > 0 else "short", "conf": cf, "risk": rk,
+                          "score": cf * (1 - rk), "age": time.time() - ch["ts"]})
+        best_h = max(per_h, key=lambda x: x["score"]) if per_h else None
 
         # 30-minute TP/SL analysis on 1m candles, kept for reference
         c1 = self.predictor.cache.get((sym, "1m"))
@@ -148,6 +172,7 @@ class Checker:
             "indicators": ind, "analogs": ana, "analog_dir": analog_dir,
             "eligible": eligible and not self.paused, "reasons": reasons,
             "source": c4["source"], "age": time.time() - c4["ts"], "options": c1["trade"]["options"][:4] if best else [],
+            "horizons": per_h, "best_h": best_h,
         }
 
     async def run(self) -> None:
@@ -173,7 +198,7 @@ class Checker:
         return {k: r[k] for k in ("symbol", "base", "name", "rank", "price", "change_24h", "side", "leverage",
                                   "kronos_p_tp", "kronos_p_sl", "kronos_p_liq", "ev", "combined_prob",
                                   "extra_risk", "score", "eligible", "reasons", "source", "max_leverage",
-                                  "p_up_4h", "conf_4h", "range_pos", "in_zone")} | {
+                                  "p_up_4h", "conf_4h", "range_pos", "in_zone", "horizons", "best_h")} | {
             "rsi": ind["rsi"], "regime": ind["regime"], "flags": ind["flags"], "ind_score": ind["score"],
             "analog_win": r["analog_dir"], "analog_n": r["analogs"].get("n", 0),
         }
