@@ -36,6 +36,9 @@ class Checker:
         self._library_ts = 0.0
         self._analog_cache: dict[tuple[str, str, int], tuple[float, dict]] = {}
         self.macro_risk = 0.0  # set by the Analyst, 0-100
+        # user rule: tokens with an open position are not analysed until it closes (set by the Executor);
+        # Kronos still forecasts them because the Executor's exits need it
+        self.excluded: set[str] = set()
         self._library15: dict[str, np.ndarray] = {}
         self._library15_ts = 0.0
 
@@ -219,6 +222,8 @@ class Checker:
                 await asyncio.to_thread(self._refresh_library15)
                 rows = []
                 for sym in self.predictor.active_symbols():  # mini: top 12, base: all
+                    if sym in self.excluded:
+                        continue  # open position: no analysis until it is closed
                     r = await asyncio.to_thread(self.evaluate, sym)
                     if r:
                         rows.append(r)

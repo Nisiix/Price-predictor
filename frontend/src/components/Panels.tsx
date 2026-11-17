@@ -17,9 +17,9 @@ function pickFor(r: CheckerRow | undefined, showDown: boolean): HorizonPick | nu
   return cands.reduce((a, b) => (b.score > a.score ? b : a));
 }
 
-export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pauseReason }: {
+export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pauseReason, held = [] }: {
   markets: Market[]; ranking: CheckerRow[]; prices: Record<string, { p: number; c: number }>; focus: string | null;
-  onFocus: (s: string) => void; paused: boolean; pauseReason: string; board?: Board | null; horizon?: string;
+  onFocus: (s: string) => void; paused: boolean; pauseReason: string; board?: Board | null; horizon?: string; held?: string[];
 }) {
   const [q, setQ] = useState("");
   const [onlyStrong, setOnlyStrong] = useState<boolean>(() => {
@@ -59,10 +59,11 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
         return { s: m.symbol, m, r, k: pickFor(r, showDown) };
       })
       .filter((x) => !ql || x.m.base.toLowerCase().includes(ql) || x.m.name.toLowerCase().includes(ql))
-      .filter((x) => x.k != null || (showDown && !onlyStrong)) // without a pick: still being computed, or no upward horizon
-      .filter((x) => !onlyStrong || (x.k != null && x.k.conf > STRONG_PROB))
-      .sort((a, b) => sortKey(b.k, sortBy) - sortKey(a.k, sortBy) || a.m.rank - b.m.rank);
-  }, [markets, byRank, q, sortBy, onlyStrong, showDown]);
+      // tokens with an open position are not analysed by the Checker: they stay at the top with a tag
+      .filter((x) => held.includes(x.s) || x.k != null || (showDown && !onlyStrong)) // without a pick: still being computed, or no upward horizon
+      .filter((x) => held.includes(x.s) || !onlyStrong || (x.k != null && x.k.conf > STRONG_PROB))
+      .sort((a, b) => Number(held.includes(b.s)) - Number(held.includes(a.s)) || sortKey(b.k, sortBy) - sortKey(a.k, sortBy) || a.m.rank - b.m.rank);
+  }, [markets, byRank, q, sortBy, onlyStrong, showDown, held]);
 
   return (
     <div className="panel">
@@ -84,7 +85,10 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
       {paused && <p className="note warn" style={{ padding: "0 8px" }}>Nuove aperture sospese: {pauseReason}</p>}
       <input className="search" placeholder="Cerca token" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Cerca token" />
       <ul className="wl">
-        {rows.map(({ s, m, r, k }) => {
+        {rows.map(({ s, m, r: r0, k: k0 }) => {
+          const isHeld = held.includes(s);
+          const r = isHeld ? undefined : r0;
+          const k = isHeld ? null : k0;
           const p = prices[s]?.p ?? m.mark_price;
           return (
             <li key={s}>
@@ -102,7 +106,7 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
                   {r && <span className={`side-tag ${r.side}`} title={`Checker, piano a 4 ore: ${pct(r.conf_4h)} di probabilità, rischio ${pct(r.extra_risk)}`}>4 ore: {r.side === "long" ? "Long" : "Short"} {r.leverage}x</span>}
                 </span>
                 <span className="score" title="Rischio aggiuntivo sull'orizzonte migliore">
-                  {k ? <span style={{ color: riskColor(k.risk) }}>rischio {pct(k.risk)}</span> : "in calcolo"}
+                  {isHeld ? <span className="kronos" title="Il Checker non analizza il token finché la posizione è aperta">posizione aperta</span> : k ? <span style={{ color: riskColor(k.risk) }}>rischio {pct(k.risk)}</span> : "in calcolo"}
                 </span>
                 {k && r && (
                   <span
@@ -236,7 +240,7 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
         </div>
       )}
       <p className="note" style={{ marginTop: 8 }}>
-        L'Executor apre solo long, quando la probabilità di rialzo a 4 ore supera il 70% e il trend a 8 ore è al rialzo (il rischio decide la leva) e il prezzo arriva al punto più basso previsto da Kronos; prima di entrare ricalcola la previsione e rinvia se ne vede un ribasso ulteriore; i token con un calo oltre il 5% in 4, 8 o 12 ore hanno la precedenza:
+        I token con una posizione aperta non vengono analizzati finché la posizione resta aperta. L'Executor apre solo long, quando la probabilità di rialzo a 4 ore supera il 70% e il trend a 8 ore è al rialzo (il rischio decide la leva) e il prezzo arriva al punto più basso previsto da Kronos; prima di entrare ricalcola la previsione e rinvia se ne vede un ribasso ulteriore; i token con un calo oltre il 5% in 4, 8 o 12 ore hanno la precedenza:
         vicino al minimo delle ultime 4 ore per un long, vicino al massimo per uno short. Seleziona una riga per l'analisi completa.
       </p>
     </div>

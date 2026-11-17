@@ -488,8 +488,10 @@ class Executor:
                     self._last_hist = time.time()
                     self.equity_hist.append((self._last_hist, self.paper_equity()))
                     self.equity_hist = self.equity_hist[-1440:]
+                held = {p.symbol for p in self.open_positions()}
                 if self.predictor is not None:
-                    self.predictor.priority = {p.symbol for p in self.open_positions()}
+                    self.predictor.priority = held
+                self.checker.excluded = held | set(self._confirming)
                 self.bus.publish("executor", self.view())
             except Exception:
                 log.exception("executor cycle failed")

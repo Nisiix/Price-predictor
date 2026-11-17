@@ -76,6 +76,7 @@ class FakeFeed:
 class FakeChecker:
     paused = False
     macro_risk = 0.0
+    excluded: set = set()
 
     def signals(self):
         return []

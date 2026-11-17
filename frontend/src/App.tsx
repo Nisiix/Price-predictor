@@ -181,7 +181,7 @@ export default function App() {
       {page === "market" ? (
         <main className="desk">
           <aside className="watch">
-            <Watchlist markets={sys?.active ? live.markets.filter((m) => sys.active!.includes(m.symbol)) : live.markets} ranking={live.ranking} prices={live.prices} focus={focus} onFocus={setFocus} paused={live.paused} pauseReason={live.pauseReason} board={live.boards[horizon] ?? null} horizon={horizon} />
+            <Watchlist markets={sys?.active ? live.markets.filter((m) => sys.active!.includes(m.symbol)) : live.markets} ranking={live.ranking} prices={live.prices} focus={focus} onFocus={setFocus} paused={live.paused} pauseReason={live.pauseReason} board={live.boards[horizon] ?? null} horizon={horizon} held={(live.executor?.positions ?? []).map((p) => p.symbol)} />
           </aside>
 
           <section className="main">
