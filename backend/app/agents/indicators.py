@@ -166,6 +166,7 @@ def pattern_analogs(
         "long_win": long_w / len(best),
         "short_win": short_w / len(best),
         "fwd_mean": float(np.mean(fwd)),
+        "fwd_up": float(np.mean(np.array(fwd) > 0)),
         "sources": sorted({c[1] for c in best}),
     }
 

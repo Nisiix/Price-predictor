@@ -6,7 +6,7 @@ Dashboard in tempo reale che usa [Kronos](https://github.com/shiyu-coder/Kronos)
 |---|---|
 | **Checker** | Per ogni token stima con Kronos la probabilità di toccare il take profit (+5% con leva) prima dello stop loss (−2%) o della liquidazione, per long e short da 10x a 20x. Aggiunge indicatori (EMA 9/21/50, RSI, MACD, Bollinger, ATR, volumi) e una ricerca dei 25 pattern storici più simili sullo stesso token e sugli altri, da cui ricava un **rischio aggiuntivo** mostrato accanto alla probabilità di Kronos. |
 | **Analyst** | Legge notizie crypto e macro (CoinDesk, Cointelegraph, Decrypt, Google News) e le confronta con un archivio di eventi storici (Mt. Gox, FTX, Terra, COVID, SVB, dazi 2025, guerre…) che hanno mosso BTC e altcoin. Con shock di mercato e Fear & Greed calcola un rischio da 0 a 100: sopra 55 sospende le nuove aperture, sopra 70 (o con una notizia critica, o con BTC/ETH/SOL −3% in 5 minuti) ordina all'Executor di chiudere tutto. |
-| **Executor** | Apre le posizioni segnalate dal Checker (100 USDC di margine, massimo 2 aperte) e le chiude per liquidazione, take profit +5% con leva, stop loss −2% con leva o ordine dell'Analyst. Invia ogni risultato al Controller. |
+| **Executor** | Strategia a 4 ore: apre le posizioni segnalate dal Checker (100 USDC di margine, massimo 2 aperte, leva da 10x a 20x in base al rischio) solo quando il prezzo è vicino al minimo delle ultime 4 ore (long) o al massimo (short). Chiude quando la previsione Kronos a 4 ore si inverte rispetto all'apertura, con uno scarto (la direzione opposta deve superare il 60%) e due previsioni consecutive di conferma, oppure per stop loss −2% con leva, liquidazione o ordine dell'Analyst. Il take profit fisso +5% è disattivato (`PP_USE_TP=1` per riattivarlo). Invia ogni risultato al Controller. |
 | **Controller** | Salva lo storico in SQLite, calcola win rate e PnL per token, pattern, fascia di probabilità, rischio, leva e motivo di chiusura, e verifica a scadenza ogni previsione di Kronos (quota di direzioni corrette per orizzonte). Report scaricabile in Markdown. |
 
 ## Simulazione e trading reale
@@ -57,7 +57,11 @@ Tutto è modificabile con variabili d'ambiente (vedi `backend/app/config.py`):
 | `PP_MARGIN_USDC` | 100 | margine per operazione |
 | `PP_MAX_POSITIONS` | 2 | posizioni aperte al massimo |
 | `PP_TP_PCT` / `PP_SL_PCT` | 5 / 2 | take profit e stop loss in % con leva |
-| `PP_MIN_SCORE` | 0.40 | punteggio minimo del Checker per un segnale |
+| `PP_MIN_SCORE` | 0.35 | punteggio minimo (probabilità a 4 ore × (1 − rischio)) per un segnale |
+| `PP_MIN_CONF` / `PP_MAX_RISK` | 0.60 / 0.55 | probabilità minima della direzione a 4 ore e rischio aggiuntivo massimo |
+| `PP_ENTRY_ZONE` | 0.20 | fascia di ingresso: ultimo 20% del range delle 4 ore verso il minimo (long) o il massimo (short) |
+| `PP_EXIT_MARGIN` / `PP_EXIT_CONFIRM` | 0.10 / 2 | scarto e conferme per chiudere sull'inversione della previsione |
+| `PP_USE_TP` | 0 | 1 riattiva il take profit fisso +5% con leva |
 | `PP_ANALYST_PAUSE` / `PP_ANALYST_CLOSE` | 55 / 70 | soglie di rischio dell'Analyst |
 | `PP_TAKER_FEE` / `PP_SLIPPAGE` | 0.0006 / 0.0002 | costi usati nella simulazione |
 

@@ -36,7 +36,7 @@ class PredictionService:
         self._rr = 0
         self._rr_board = 0
         self._turn = 0
-        self.board_horizons: set[str] = {"15m"}  # horizons the open dashboards sort their token list by
+        self.board_horizons: set[str] = {"15m", "4h"}  # 4h always (Executor strategy) + what dashboards show
         self.calib = Calibration()
         self.busy_with: str | None = None
         self.inferences = 0
@@ -96,8 +96,8 @@ class PredictionService:
                 if stale(sym, tf, MAX_AGE[tf]) and self.feed.store.count(sym, tf) >= MIN_BARS[tf]:
                     return sym, tf
         for sym in list(self.priority):
-            if stale(sym, "1m", 30.0) and self.feed.store.count(sym, "1m") >= MIN_BARS["1m"]:
-                return sym, "1m"
+            if stale(sym, "15m", 180.0) and self.feed.store.count(sym, "15m") >= MIN_BARS["15m"]:
+                return sym, "15m"  # open positions: keep the 4h forecast fresh for the reversal exit
         # alternate the Checker scan (1m) with the scan of the dashboard's horizon timeframe
         board_tfs = sorted({HORIZONS[h][1] for h in self.board_horizons if h in HORIZONS} or {"1m"})
         self._turn += 1

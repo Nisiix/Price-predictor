@@ -54,7 +54,14 @@ class Settings:
     slippage: float = _f("PP_SLIPPAGE", 0.0002)  # per side, on price
 
     # --- checker / analyst ------------------------------------------------------
-    min_signal_score: float = _f("PP_MIN_SCORE", 0.40)
+    # 4-hour strategy (Checker selection + Executor entry/exit)
+    min_signal_score: float = _f("PP_MIN_SCORE", 0.35)  # probability x (1 - risk) on the 4h horizon
+    min_confidence: float = _f("PP_MIN_CONF", 0.60)  # Kronos probability of the predicted 4h direction
+    max_risk: float = _f("PP_MAX_RISK", 0.55)  # extra risk ceiling
+    entry_zone: float = _f("PP_ENTRY_ZONE", 0.20)  # long in the lowest 20% of the 4h range, short in the highest 20%
+    exit_margin: float = _f("PP_EXIT_MARGIN", 0.10)  # reversal only if the opposite direction reaches 50% + margin
+    exit_confirmations: int = _i("PP_EXIT_CONFIRM", 2)  # consecutive 4h forecasts confirming the reversal
+    use_take_profit: bool = os.getenv("PP_USE_TP", "0") == "1"  # fixed +5% take profit (off: exit on reversal)
     analyst_close_threshold: float = _f("PP_ANALYST_CLOSE", 70.0)
     analyst_pause_threshold: float = _f("PP_ANALYST_PAUSE", 55.0)
     news_poll_s: int = _i("PP_NEWS_POLL_S", 120)

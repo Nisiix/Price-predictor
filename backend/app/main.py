@@ -40,7 +40,7 @@ _client_horizon: dict[int, str] = {}  # each open dashboard sorts by its own hor
 
 
 def _sync_horizons() -> None:
-    predictor.board_horizons = set(_client_horizon.values()) or {"15m"}
+    predictor.board_horizons = set(_client_horizon.values()) | {"4h"}  # the Executor trades on 4h
 STARTED = time.time()
 
 

@@ -61,6 +61,9 @@ class Position:
     roe: float = 0.0  # net return on margin
     lev_move: float = 0.0  # gross leveraged price move (what TP/SL watch), %
     venue_order_id: str | None = None
+    p_dir_now: float | None = None  # latest Kronos 4h probability of the position's direction
+    last_pred_ts: float = 0.0
+    reverse_count: int = 0
 
     def view(self) -> dict:
         d = asdict(self)
@@ -151,22 +154,27 @@ class Executor:
         if not price:
             return
         side = 1 if sig["side"] == "long" else -1
-        snapshot = {k: sig.get(k) for k in ("kronos_p_tp", "kronos_p_sl", "combined_prob", "extra_risk", "score", "ev", "source")}
+        snapshot = {k: sig.get(k) for k in ("kronos_p_tp", "kronos_p_sl", "combined_prob", "extra_risk", "score", "ev",
+                                            "source", "p_up_4h", "conf_4h", "range_pos")}
         snapshot["regime"] = sig["indicators"]["regime"]
         snapshot["rsi"] = sig["indicators"]["rsi"]
-        snapshot["analog_win"] = sig["analogs"].get("long_win" if side > 0 else "short_win")
+        snapshot["analog_win"] = sig.get("analog_dir")
         snapshot["macro_risk"] = self.checker.macro_risk
         if self.mode == "real":
             await self._real_open(sym, side, sig["leverage"], settings.margin_usdc, price, "executor", snapshot)
             return
         p = self._make_position(sym, side, sig["leverage"], settings.margin_usdc, price, "executor", snapshot)
+        if not settings.use_take_profit:
+            p.tp = 0.0  # exit on forecast reversal instead
+        p.p_dir_now = sig.get("conf_4h")
         self.balance -= p.margin + p.fees
         self.positions[p.id] = p
+        where = "minimo" if side > 0 else "massimo"
         self.bus.agent_log(
             "Executor",
-            f"Aperta {'LONG' if side > 0 else 'SHORT'} simulata su {p.base} {p.leverage:.0f}x a {p.entry:.6g} "
-            f"(TP {p.tp:.6g}, SL {p.sl:.6g}, liq {p.liq:.6g}); Kronos TP {sig['kronos_p_tp'] * 100:.0f}%, "
-            f"rischio aggiuntivo {sig['extra_risk'] * 100:.0f}%", "success",
+            f"Aperta {'LONG' if side > 0 else 'SHORT'} simulata su {p.base} {p.leverage:.0f}x a {p.entry:.6g} vicino al {where} "
+            f"delle 4 ore (SL {p.sl:.6g}, liq {p.liq:.6g}); Kronos 4h {(sig.get('conf_4h') or 0) * 100:.0f}% "
+            f"{'in rialzo' if side > 0 else 'in ribasso'}, rischio aggiuntivo {sig['extra_risk'] * 100:.0f}%", "success",
         )
 
     async def manual_order(self, sym: str, side: str, leverage: float, margin: float, order_type: str,
@@ -240,8 +248,31 @@ class Executor:
             return "liquidazione"
         if (p.side > 0 and price <= p.sl) or (p.side < 0 and price >= p.sl):
             return f"stop loss {-settings.stop_loss_pct:.0f}% (leva)"
-        if (p.side > 0 and price >= p.tp) or (p.side < 0 and price <= p.tp):
+        if p.tp > 0 and ((p.side > 0 and price >= p.tp) or (p.side < 0 and price <= p.tp)):
             return f"take profit +{settings.take_profit_pct:.0f}% (leva)"
+        return self._reversal(p)
+
+    def _reversal(self, p: Position) -> str | None:
+        """Close when the 4h forecast flips against the position, with a margin and confirmation
+        so small wobbles around 50% do not close a trade early (the stop loss stays active anyway)."""
+        if self.predictor is None:
+            return None
+        c = self.predictor.cache.get((p.symbol, "15m"))
+        if not c or c["ts"] <= p.last_pred_ts or c["ts"] < p.opened_ts:
+            return None
+        p.last_pred_ts = c["ts"]
+        from ..config import HORIZONS
+
+        closes = c["paths"][:, HORIZONS["4h"][2] - 1, 3]
+        p_up = float((closes > c["last"]).mean())
+        p.p_dir_now = p_up if p.side > 0 else 1 - p_up
+        if p.p_dir_now < 0.5 - settings.exit_margin:
+            p.reverse_count += 1
+        else:
+            p.reverse_count = 0
+        if p.reverse_count >= settings.exit_confirmations:
+            opp = 1 - p.p_dir_now
+            return f"inversione della previsione 4h ({'ribasso' if p.side > 0 else 'rialzo'} al {opp * 100:.0f}%)"
         return None
 
     async def run(self) -> None:
@@ -294,7 +325,7 @@ class Executor:
         for sig in self.checker.signals():
             if sig["symbol"] in held or self.cooldown.get(sig["symbol"], 0) > time.time():
                 continue
-            if sig["age"] > 240:
+            if sig["age"] > 900:
                 continue  # stale forecast
             await self.open_from_signal(sig)
             return  # one per cycle
@@ -313,7 +344,8 @@ class Executor:
         qty = margin * lev / price
         self._intent({
             "action": "open", "symbol": sym, "base": m.base, "side": "long" if side > 0 else "short",
-            "leverage": lev, "margin": margin, "qty": qty, "price": price, "tp": lv["tp"], "sl": lv["sl"],
+            "leverage": lev, "margin": margin, "qty": qty, "price": price,
+            "tp": lv["tp"] if settings.use_take_profit else None, "sl": lv["sl"],
             "base_tick": m.base_tick, "quote_tick": m.quote_tick, "origin": origin, "signal": snapshot,
         })
         self.bus.agent_log("Executor", f"Richiesta ordine REALE {('LONG' if side > 0 else 'SHORT')} {m.base} {lev}x inviata alla dashboard per la firma", "warn")
@@ -350,6 +382,8 @@ class Executor:
             if qty:
                 p.qty = qty
             p.venue_order_id = order_id
+            if not settings.use_take_profit:
+                p.tp = 0.0
             self.positions[p.id] = p
             self.bus.agent_log("Executor", f"Posizione REALE aperta su {p.base} a {p.entry:.6g}", "success")
         else:
@@ -395,4 +429,6 @@ class Executor:
             "pending": [o.view() for o in self.pending.values()], "intents": list(self.intents.values()),
             "max_positions": settings.max_positions, "margin_usdc": settings.margin_usdc,
             "tp_pct": settings.take_profit_pct, "sl_pct": settings.stop_loss_pct,
+            "use_tp": settings.use_take_profit, "exit_margin": settings.exit_margin,
+            "exit_confirmations": settings.exit_confirmations, "entry_zone": settings.entry_zone,
         }

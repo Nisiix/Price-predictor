@@ -106,6 +106,7 @@ def make(price=100.0):
 
 def open_long(ex, lev=10):
     sig = {"symbol": "PERP_SOL_USDC", "side": "long", "leverage": lev, "kronos_p_tp": 0.6, "extra_risk": 0.2,
+           "conf_4h": 0.7, "p_up_4h": 0.7, "analog_dir": 0.6,
            "indicators": {"regime": "laterale", "rsi": 55}, "analogs": {"long_win": 0.5}}
     asyncio.run(ex.open_from_signal(sig))
     return next(iter(ex.positions.values()))
@@ -120,7 +121,8 @@ def step(ex, feed, price):
     return reason
 
 
-def test_take_profit_at_plus_5_leveraged():
+def test_take_profit_at_plus_5_leveraged(monkeypatch):
+    monkeypatch.setattr(settings, "use_take_profit", True)
     feed, ctl, ex = make()
     p = open_long(ex)
     assert p.margin == settings.margin_usdc and p.notional == settings.margin_usdc * 10
@@ -166,3 +168,33 @@ def test_max_two_positions():
     ex.positions["X"] = ex.positions[next(iter(ex.positions))].__class__(**{**ex.open_positions()[0].__dict__, "id": "X"})
     ok, why = ex.can_open()
     assert settings.max_positions == 2 and not ok
+
+
+def test_no_take_profit_by_default_and_reversal_exit():
+    feed, ctl, ex = make()
+    p = open_long(ex)
+    assert p.tp == 0.0  # exit on reversal, not on +5%
+    assert step(ex, feed, p.entry * 1.006) is None  # +6% leveraged: still open
+
+    class Pred:
+        cache = {}
+
+    ex.predictor = Pred()
+
+    def forecast(p_up, ts):
+        n = 24
+        ups = int(round(p_up * n))
+        last = 100.0
+        closes = np.array([last * 1.01] * ups + [last * 0.99] * (n - ups))
+        paths = np.repeat(closes[:, None, None], 16, axis=1).repeat(4, axis=2)
+        Pred.cache[("PERP_SOL_USDC", "15m")] = {"ts": ts, "last": last, "paths": paths}
+
+    t0 = p.opened_ts + 1
+    forecast(0.45, t0)  # opposite only 55%: inside the margin, no exit
+    assert ex._reversal(p) is None and p.reverse_count == 0
+    forecast(0.30, t0 + 1)  # opposite 70%: first confirmation
+    assert ex._reversal(p) is None and p.reverse_count == 1
+    assert ex._reversal(p) is None  # same forecast again does not count twice
+    forecast(0.25, t0 + 2)  # second confirmation -> close
+    r = ex._reversal(p)
+    assert r and r.startswith("inversione")

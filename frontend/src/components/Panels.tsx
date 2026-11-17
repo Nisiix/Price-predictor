@@ -62,7 +62,7 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
                 </span>
                 <span className="meta">
                   {price(p)}
-                  {r && <span className={`side-tag ${r.side}`} title={`Checker: TP ${pct(r.kronos_p_tp)}, rischio ${pct(r.extra_risk)}`}>{r.side === "long" ? "Long" : "Short"} {r.leverage}x</span>}
+                  {r && <span className={`side-tag ${r.side}`} title={`Checker, piano a 4 ore: ${pct(r.conf_4h)} di probabilità, rischio ${pct(r.extra_risk)}`}>{r.side === "long" ? "Long" : "Short"} {r.leverage}x</span>}
                 </span>
                 <span className="score" title="Rischio aggiuntivo stimato dal Checker">
                   {r ? <span style={{ color: riskColor(r.extra_risk) }}>rischio {pct(r.extra_risk)}</span> : b ? "rischio in calcolo" : "in calcolo"}
@@ -138,56 +138,69 @@ export function HorizonLadder({ snap, selected, onSelect }: { snap: Snapshot | u
 }
 
 // ------------------------------------------------------------------ checker ranking (Agenti page)
+function RangeBar({ pos, side }: { pos: number; side: "long" | "short" }) {
+  const zone = 20;
+  return (
+    <div className="rangebar" title={`Prezzo al ${Math.round(pos * 100)}% del range delle ultime 4 ore (0% = minimo, 100% = massimo)`}>
+      <div className={`zone ${side}`} style={side === "long" ? { left: 0, width: `${zone}%` } : { right: 0, width: `${zone}%` }} />
+      <div className="dotp" style={{ left: `${Math.max(0, Math.min(100, pos * 100))}%` }} />
+    </div>
+  );
+}
+
 export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
   ranking: CheckerRow[]; focus: string | null; onFocus: (s: string) => void; paused: boolean; pauseReason: string;
 }) {
   return (
     <div className="panel">
-      <h2>Checker <small>{ranking.length ? `${ranking.length} token valutati per long e short da 10x a 20x` : "in attesa delle prime previsioni"}</small></h2>
+      <h2>Checker <small>{ranking.length ? `${ranking.length} token, piano a 4 ore ordinato per probabilità × (1 − rischio)` : "in attesa delle previsioni a 4 ore"}</small></h2>
       {paused && <p className="note warn">Nuove aperture sospese dall'Analyst: {pauseReason}</p>}
-      {ranking.length === 0 ? <p className="empty">Il Checker pubblica la classifica dopo la prima scansione di Kronos.</p> : (
-        <div className="scroll" style={{ maxHeight: 360, overflowY: "auto" }}>
+      {ranking.length === 0 ? <p className="empty">Il Checker pubblica la classifica quando Kronos ha calcolato le 4 ore dei token (pochi minuti dall'avvio).</p> : (
+        <div className="scroll" style={{ maxHeight: 380, overflowY: "auto" }}>
           <table className="t">
             <thead>
-              <tr><th>Token</th><th>Setup</th><th className="n">Kronos TP</th><th className="n">Pattern</th><th className="n">Rischio</th><th className="n">Punteggio</th><th>Esito</th></tr>
+              <tr><th>Token</th><th>Kronos 4 ore</th><th>Leva</th><th className="n">Pattern</th><th className="n">Rischio</th><th className="n">Punteggio</th><th>Range 4 ore</th><th>Esito</th></tr>
             </thead>
             <tbody>
               {ranking.map((r) => (
                 <tr key={r.symbol} className={`clickable ${focus === r.symbol ? "cur" : ""}`} onClick={() => onFocus(r.symbol)}>
                   <td><b>{r.base}</b></td>
-                  <td className={r.side}>{r.side === "long" ? "Long" : "Short"} {r.leverage}x</td>
-                  <td className="n">{pct(r.kronos_p_tp)}</td>
+                  <td className={r.side}>{r.side === "long" ? "▲ rialzo" : "▼ ribasso"} {pct(r.conf_4h)}</td>
+                  <td>{r.leverage}x</td>
                   <td className="n">{r.analog_win != null ? pct(r.analog_win) : "–"}</td>
-                  <td className="n" style={{ color: r.extra_risk > 0.5 ? "var(--short)" : r.extra_risk > 0.35 ? "var(--warn)" : "var(--long)" }}>{pct(r.extra_risk)}</td>
+                  <td className="n" style={{ color: riskColor(r.extra_risk) }}>{pct(r.extra_risk)}</td>
                   <td className="n">{r.score.toFixed(2)}</td>
-                  <td className="faint" style={{ fontSize: 12 }}>{r.eligible ? <span className="kronos">segnale all'Executor</span> : r.reasons[0] ?? ""}</td>
+                  <td><RangeBar pos={r.range_pos} side={r.side} /></td>
+                  <td className="faint" style={{ fontSize: 12 }}>{r.eligible ? <span className="kronos">ingresso: segnale all'Executor</span> : r.reasons[0] ?? ""}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      <p className="note" style={{ marginTop: 8 }}>Seleziona una riga per vedere sotto l'analisi completa del token.</p>
+      <p className="note" style={{ marginTop: 8 }}>
+        L'Executor apre solo quando la direzione a 4 ore è probabile, il rischio è contenuto e il prezzo è nella fascia evidenziata:
+        vicino al minimo delle ultime 4 ore per un long, vicino al massimo per uno short. Seleziona una riga per l'analisi completa.
+      </p>
     </div>
   );
 }
 
 // ------------------------------------------------------------------ checker verdict for focus token
 export function Verdict({ snap }: { snap: Snapshot | undefined }) {
-  const c = snap?.checker;
+  const c = snap?.checker as any;
   if (!c) {
     return (
       <div className="panel">
         <h2>Analisi del Checker {snap?.symbol ? <small>{snap.symbol.split("_")[1]}</small> : null}</h2>
-        <p className="empty">Il Checker non ha ancora valutato questo token: serve almeno un'ora di candele da 1 minuto e una previsione Kronos.</p>
+        <p className="empty">Il Checker non ha ancora valutato questo token: servono le candele da 15 minuti e una previsione Kronos a 4 ore.</p>
       </div>
     );
   }
   const ind = c.indicators;
   const an = c.analogs;
-  const win = c.side === "long" ? an.long_win : an.short_win;
   const labels: Record<string, string> = {
-    kronos_avverso: "Kronos: SL o liquidazione", indicatori_contrari: "Indicatori contrari", pattern_storici: "Pattern storici perdenti",
+    kronos_avverso: "Kronos: direzione opposta", indicatori_contrari: "Indicatori contrari", pattern_storici: "Pattern storici contrari",
     volatilita: "Volatilità vs stop", macro_analyst: "Rischio macro (Analyst)",
   };
   return (
@@ -195,23 +208,24 @@ export function Verdict({ snap }: { snap: Snapshot | undefined }) {
       <h2>
         Analisi del Checker: {c.base}
         <small>
-          miglior setup: <span className={c.side}>{c.side === "long" ? "long" : "short"} {c.leverage}x</span>
-          {c.eligible ? " · segnale valido" : c.reasons.length ? ` · ${c.reasons.join(", ")}` : ""}
+          piano a 4 ore: <span className={c.side}>{c.side} {c.leverage}x</span>
+          {c.eligible ? " · segnale all'Executor" : c.reasons.length ? ` · ${c.reasons.join(", ")}` : ""}
         </small>
       </h2>
       <div className="verdict">
         <section>
-          <h3>Kronos</h3>
-          <div className="big kronos">{pct(c.kronos_p_tp)}</div>
-          <div className="note">di toccare il take profit prima dello stop</div>
+          <h3>Kronos a 4 ore</h3>
+          <div className={`big ${c.side}`}>{c.side === "long" ? "▲" : "▼"} {pct(c.conf_4h)}</div>
+          <div className="note">probabilità di {c.side === "long" ? "rialzo" : "ribasso"} tra 4 ore</div>
           <dl className="kv">
-            <dt>Stop loss prima</dt><dd>{pct(c.kronos_p_sl)}</dd>
-            <dt>Liquidazione</dt><dd>{pct(c.kronos_p_liq, 1)}</dd>
-            <dt>Valore atteso</dt><dd className={c.ev >= 0 ? "long" : "short"}>{signed(c.ev * 100, 2)}%</dd>
+            <dt>Rendimento medio atteso</dt><dd className={c.exp_ret_4h >= 0 ? "long" : "short"}>{signed(c.exp_ret_4h * 100, 2)}%</dd>
+            <dt>Range 4 ore</dt><dd>{price(c.range_lo)} – {price(c.range_hi)}</dd>
+            <dt>Posizione nel range</dt><dd>{pct(c.range_pos)}</dd>
           </dl>
+          <div style={{ marginTop: 8 }}><RangeBar pos={c.range_pos} side={c.side} /></div>
         </section>
         <section>
-          <h3>Indicatori e medie</h3>
+          <h3>Indicatori (candele 15 min)</h3>
           <div className="big">{ind.score >= 0 ? "+" : ""}{ind.score.toFixed(2)}</div>
           <div className="note">{ind.regime}</div>
           <dl className="kv">
@@ -219,28 +233,28 @@ export function Verdict({ snap }: { snap: Snapshot | undefined }) {
             <dt>EMA 9 / 21</dt><dd className={ind.ema9 > ind.ema21 ? "long" : "short"}>{ind.ema9 > ind.ema21 ? "sopra" : "sotto"}</dd>
             <dt>MACD hist</dt><dd className={ind.macd_hist > 0 ? "long" : "short"}>{ind.macd_hist > 0 ? "positivo" : "negativo"}</dd>
             <dt>Bollinger %B</dt><dd>{ind.bb_pct_b.toFixed(2)}</dd>
-            <dt>ATR 1m</dt><dd>{(ind.atr_pct * 100).toFixed(2)}%</dd>
+            <dt>ATR 15 min</dt><dd>{(ind.atr_pct * 100).toFixed(2)}%</dd>
           </dl>
           {ind.flags.length > 0 && <div className="flags">{ind.flags.map((f: string) => <span key={f}>{f}</span>)}</div>}
         </section>
         <section>
           <h3>Pattern storici</h3>
-          <div className="big">{win != null ? pct(win) : "–"}</div>
-          <div className="note">{an.n ? `dei ${an.n} casi più simili ha raggiunto il TP` : "storico insufficiente"}</div>
+          <div className="big">{c.analog_dir != null ? pct(c.analog_dir) : "–"}</div>
+          <div className="note">{an.n ? `dei ${an.n} casi più simili è andato ${c.side === "long" ? "su" : "giù"} nelle 4 ore dopo` : "storico insufficiente"}</div>
           {an.n > 0 && (
             <dl className="kv">
               <dt>Somiglianza media</dt><dd>{pct(an.similarity)}</dd>
-              <dt>Rendimento dopo 30 min</dt><dd>{signed(an.fwd_mean * 100, 2)}%</dd>
+              <dt>Rendimento dopo 4 ore</dt><dd>{signed(an.fwd_mean * 100, 2)}%</dd>
               <dt>Fonti</dt><dd title={an.sources.join(", ")}>{an.sources.slice(0, 4).map((s: string) => s.split("_")[1]).join(", ")}{an.sources.length > 4 ? "…" : ""}</dd>
             </dl>
           )}
         </section>
         <section>
           <h3>Rischio aggiuntivo</h3>
-          <div className="big" style={{ color: c.extra_risk > 0.5 ? "var(--short)" : c.extra_risk > 0.35 ? "var(--warn)" : "var(--long)" }}>{pct(c.extra_risk)}</div>
-          <div className="note">probabilità combinata {pct(c.combined_prob)}</div>
+          <div className="big" style={{ color: riskColor(c.extra_risk) }}>{pct(c.extra_risk)}</div>
+          <div className="note">punteggio {c.score.toFixed(2)} · leva scelta {c.leverage}x</div>
           <div style={{ marginTop: 8 }}>
-            {Object.entries(c.risk_parts).map(([k, v]) => (
+            {Object.entries(c.risk_parts as Record<string, number>).map(([k, v]) => (
               <div key={k} style={{ fontSize: 12 }}>
                 <div style={{ display: "flex", justifyContent: "space-between" }}><span className="muted">{labels[k] ?? k}</span><span>{pct(v)}</span></div>
                 <div className="riskbar"><span style={{ width: `${Math.min(100, v * 100)}%` }} /></div>
@@ -273,7 +287,7 @@ export function Positions({ ex, onToast, realClose }: { ex: ExecutorView | null;
         {ex.mode === "paper" && <div><span>Saldo simulato</span><b>{usd(ex.equity)}</b></div>}
         <div><span>Posizioni</span><b>{ex.positions.length} / {ex.max_positions}</b></div>
         <div><span>Per operazione</span><b>{ex.margin_usdc} USDC</b></div>
-        <div><span>Regole</span><b style={{ fontSize: 14 }}>TP +{ex.tp_pct}% · SL −{ex.sl_pct}%</b></div>
+        <div><span>Chiusura</span><b style={{ fontSize: 14 }}>{ex.use_tp ? `TP +${ex.tp_pct}% · ` : "inversione 4 ore · "}SL −{ex.sl_pct}% con leva</b></div>
         <label className="switch" style={{ marginLeft: "auto" }}>
           <input type="checkbox" checked={ex.auto} onChange={toggleAuto} /> Apertura automatica
         </label>
@@ -283,7 +297,7 @@ export function Positions({ ex, onToast, realClose }: { ex: ExecutorView | null;
       ) : (
         <div className="scroll">
           <table className="t">
-            <thead><tr><th>Token</th><th>Lato</th><th className="n">Entrata</th><th className="n">Prezzo</th><th>Verso TP / SL</th><th className="n">PnL</th><th /></tr></thead>
+            <thead><tr><th>Token</th><th>Lato</th><th className="n">Entrata</th><th className="n">Prezzo</th><th>Andamento con leva</th><th>Kronos 4 ore ora</th><th className="n">PnL</th><th /></tr></thead>
             <tbody>
               {ex.positions.map((p) => {
                 // map lev_move from [-SL, +TP] onto the track
@@ -301,7 +315,15 @@ export function Positions({ ex, onToast, realClose }: { ex: ExecutorView | null;
                         <div className="z" style={{ left: `${zero}%` }} />
                         <div className="m" style={{ left: `${Math.min(zero, at)}%`, width: `${Math.abs(at - zero)}%`, background: p.lev_move >= 0 ? "var(--long)" : "var(--short)" }} />
                       </div>
-                      <span className="faint" style={{ fontSize: 11 }}>{signed(p.lev_move, 2)}% leva · liq {price(p.liq)}</span>
+                      <span className="faint" style={{ fontSize: 11 }}>{signed(p.lev_move, 2)}% leva · SL {price(p.sl)} · liq {price(p.liq)}</span>
+                    </td>
+                    <td style={{ fontSize: 12 }}>
+                      {p.p_dir_now != null ? (
+                        <span style={{ color: p.p_dir_now >= 0.5 ? "var(--long)" : p.p_dir_now >= 0.5 - ex.exit_margin ? "var(--warn)" : "var(--short)" }}>
+                          {pct(p.p_dir_now)} a favore
+                        </span>
+                      ) : "–"}
+                      {p.reverse_count > 0 && <div className="faint">inversione {p.reverse_count}/{ex.exit_confirmations}</div>}
                     </td>
                     <td className={`n ${p.pnl >= 0 ? "long" : "short"}`}>{signed(p.pnl)}<br /><span style={{ fontSize: 11 }}>{signed(p.roe, 1)}%</span></td>
                     <td className="n"><button className="ghost danger" onClick={() => close(p)} disabled={p.status !== "open"}>{p.status === "closing" ? "In chiusura" : "Chiudi"}</button></td>

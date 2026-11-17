@@ -119,7 +119,8 @@ export default function App() {
     const ls: { y: number; label: string; color: string }[] = [];
     for (const p of live.executor?.positions ?? []) {
       if (p.symbol !== focus) continue;
-      ls.push({ y: p.entry, label: `Entrata ${p.side}`, color: "var(--text)" }, { y: p.tp, label: "TP", color: "var(--long)" }, { y: p.sl, label: "SL", color: "var(--short)" });
+      ls.push({ y: p.entry, label: `Entrata ${p.side}`, color: "var(--text)" }, { y: p.sl, label: "SL", color: "var(--short)" });
+      if (p.tp > 0) ls.push({ y: p.tp, label: "TP", color: "var(--long)" });
     }
     return ls;
   }, [live.executor, focus]);

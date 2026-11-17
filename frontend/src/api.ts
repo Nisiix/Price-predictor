@@ -21,16 +21,18 @@ export type CheckerRow = {
   leverage: number; kronos_p_tp: number; kronos_p_sl: number; kronos_p_liq: number; ev: number; combined_prob: number;
   extra_risk: number; score: number; eligible: boolean; reasons: string[]; source: string; max_leverage: number;
   rsi: number; regime: string; flags: string[]; ind_score: number; analog_win: number | null; analog_n: number;
+  p_up_4h: number; conf_4h: number; range_pos: number; in_zone: boolean;
 };
 export type Position = {
   id: string; symbol: string; base: string; side: "long" | "short"; leverage: number; margin: number; entry: number;
   qty: number; notional: number; tp: number; sl: number; liq: number; mode: string; origin: string; opened_ts: number;
   fees: number; funding: number; last_price: number; status: string; pnl: number; roe: number; lev_move: number; signal: any;
+  p_dir_now: number | null; reverse_count: number;
 };
 export type ExecutorView = {
   mode: "paper" | "real"; auto: boolean; wallet: string | null; real_ready: boolean; real_auto: boolean; balance: number;
   equity: number; positions: Position[]; pending: any[]; intents: Intent[]; max_positions: number; margin_usdc: number;
-  tp_pct: number; sl_pct: number;
+  tp_pct: number; sl_pct: number; use_tp: boolean; exit_margin: number; exit_confirmations: number; entry_zone: number;
 };
 export type Intent = { id: string; ts: number; action: "open" | "close"; symbol: string; base?: string; side: "long" | "short"; leverage?: number; margin?: number; qty: number; price?: number; tp?: number; sl?: number; base_tick?: number; quote_tick?: number; position_id?: string; reason?: string };
 export type Headline = { id: string; title: string; source: string; url: string; ts: number; categories: string[]; calming: boolean; severity: number; analog: { date: string; title: string; btc_move: number } | null };
