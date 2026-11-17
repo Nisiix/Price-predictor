@@ -152,12 +152,6 @@ export default function App() {
         <div className="brand">
           <h1>Predictor</h1>
         </div>
-        <nav className="pages" role="tablist" aria-label="Sezioni">
-          <button role="tab" aria-selected={page === "market"} onClick={() => setPage("market")}>Mercato</button>
-          <button role="tab" aria-selected={page === "agents"} onClick={() => setPage("agents")}>
-            Agenti{(live.executor?.positions.length ?? 0) > 0 && <span className="badge">{live.executor!.positions.length}</span>}
-          </button>
-        </nav>
         <div className="status" aria-live="polite">
           <span className="chip"><span className={`dot ${live.connected && feedOk ? "ok" : live.connected ? "warn" : "bad"}`} />Prezzi {live.connected ? (feedOk ? "in tempo reale" : "in ritardo") : "disconnesso"}</span>
           <span className="chip"><span className={`dot ${sys?.kronos.ready ? "ok" : sys?.kronos.error ? "bad" : "warn"}`} />
@@ -166,6 +160,12 @@ export default function App() {
           <span className="chip"><span className={`dot ${(sys?.analyst.risk ?? 0) >= 70 ? "bad" : (sys?.analyst.risk ?? 0) >= 55 ? "warn" : "ok"}`} />Rischio macro <b>{(sys?.analyst.risk ?? 0).toFixed(0)}</b></span>
           <span className="chip"><span className={`dot ${live.executor?.mode === "real" ? "warn" : "ok"}`} />{live.executor?.mode === "real" ? <b>Trading reale attivo</b> : "Executor in simulazione"}</span>
         </div>
+        <nav className="pages" role="tablist" aria-label="Sezioni">
+          <button role="tab" aria-selected={page === "market"} onClick={() => setPage("market")}>Mercato</button>
+          <button role="tab" aria-selected={page === "agents"} onClick={() => setPage("agents")}>
+            Agenti{(live.executor?.positions.length ?? 0) > 0 && <span className="badge">{live.executor!.positions.length}</span>}
+          </button>
+        </nav>
         {walletChip}
       </header>
 
