@@ -31,13 +31,13 @@ class Settings:
     min_max_leverage: int = 10  # a market must allow at least 10x
 
     # --- Kronos --------------------------------------------------------------
-    kronos_model: str = os.getenv("PP_KRONOS_MODEL", "NeoQuasar/Kronos-mini")
-    kronos_tokenizer: str = os.getenv("PP_KRONOS_TOKENIZER", "NeoQuasar/Kronos-Tokenizer-2k")
+    kronos_model: str = os.getenv("PP_KRONOS_MODEL", "NeoQuasar/Kronos-base")  # user: always the largest open model
+    kronos_tokenizer: str = os.getenv("PP_KRONOS_TOKENIZER", "NeoQuasar/Kronos-Tokenizer-base")
     # largest open Kronos model, used where accuracy matters more than speed: the 4h forecast of open
     # positions and the re-prediction right before an entry (Kronos-mini keeps scanning the universe)
-    decision_model: str = os.getenv("PP_DECISION_MODEL", "NeoQuasar/Kronos-base")
+    decision_model: str = os.getenv("PP_DECISION_MODEL", "")  # empty: decisions use the main model (already base)
     decision_tokenizer: str = os.getenv("PP_DECISION_TOKENIZER", "NeoQuasar/Kronos-Tokenizer-base")
-    kronos_max_context: int = _i("PP_KRONOS_MAX_CONTEXT", 2048)
+    kronos_max_context: int = _i("PP_KRONOS_MAX_CONTEXT", 512)
     lookback: int = _i("PP_LOOKBACK", 128)  # bars fed to the model (CPU budget)
     n_samples: int = _i("PP_SAMPLES", 24)  # sampled futures per prediction
     temperature: float = _f("PP_TEMPERATURE", 1.0)
@@ -70,7 +70,7 @@ class Settings:
     min_signal_score: float = _f("PP_MIN_SCORE", 0.0)  # probability x (1 - risk); 0 = off (user: ignore risk for entries)
     min_confidence: float = _f("PP_MIN_CONF", 0.70)  # Kronos 4h probability must be ABOVE this (user rule: > 70%)
     max_risk: float = _f("PP_MAX_RISK", 0.40)  # user rule: no opening above 40% extra risk
-    max_forecast_age_s: float = _f("PP_MAX_FORECAST_AGE", 900.0)  # no entries on a 4h forecast older than 15 min
+    max_forecast_age_s: float = _f("PP_MAX_FORECAST_AGE", 2700.0)  # screening age limit; the entry itself re-predicts
     longs_only: bool = os.getenv("PP_LONGS_ONLY", "1") == "1"  # user rule: the Executor opens long positions only
     drop_priority_pct: float = _f("PP_DROP_PRIORITY", 5.0)  # >5% drop in 4/8/12 h moves a token up the opening queue
     entry_zone: float = _f("PP_ENTRY_ZONE", 0.20)
@@ -96,6 +96,8 @@ class Settings:
 
 
 settings = Settings()
+# a slower model refreshes everything less often so the CPU is not saturated (base ~10x mini on CPU)
+SCAN_FACTOR = float(os.getenv("PP_SCAN_FACTOR", "6" if "base" in settings.kronos_model.lower() else "1"))
 
 # Horizons shown on the dashboard: label -> (seconds, timeframe used, steps on that timeframe)
 TIMEFRAMES = {"5s": 5, "1m": 60, "5m": 300, "15m": 900}

@@ -13,7 +13,7 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
-from ..config import EXPERIMENTAL_HORIZONS, HORIZONS, PRED_LEN, TIMEFRAMES, settings
+from ..config import EXPERIMENTAL_HORIZONS, HORIZONS, PRED_LEN, SCAN_FACTOR, TIMEFRAMES, settings
 from ..market.feed import MarketFeed
 from .engine import KronosEngine, SeriesInput, monte_carlo_paths
 from .probability import best_trade, fan, horizon_stats
@@ -112,7 +112,7 @@ class PredictionService:
 
         for sym in list(self.focus):
             for tf in ("1m", "5m", "15m"):  # sub-minute horizons are no longer shown on the dashboard
-                if stale(sym, tf, MAX_AGE[tf]) and self.feed.store.count(sym, tf) >= MIN_BARS[tf]:
+                if stale(sym, tf, MAX_AGE[tf] * SCAN_FACTOR) and self.feed.store.count(sym, tf) >= MIN_BARS[tf]:
                     return sym, tf
         for sym in list(self.priority):
             # open positions: keep the 4h forecast fresh for the exits, with the large model when loaded
@@ -125,7 +125,7 @@ class PredictionService:
         board_jobs = [("board", board_tfs[(self._turn // 2) % len(board_tfs)])]
         order = board_jobs + [("checker", "1m")] if self._turn % 2 else [("checker", "1m")] + board_jobs
         for kind, tf in order:
-            job = self._scan(tf, BOARD_AGE[tf] if kind == "board" else SCAN_AGE, kind, stale)
+            job = self._scan(tf, (BOARD_AGE[tf] if kind == "board" else SCAN_AGE) * SCAN_FACTOR, kind, stale)
             if job:
                 return job
         return None
