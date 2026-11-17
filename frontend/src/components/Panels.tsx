@@ -289,7 +289,7 @@ export function Positions({ ex, onToast, realClose }: { ex: ExecutorView | null;
         {ex.mode === "paper" && <div><span>Saldo simulato</span><b>{usd(ex.equity)}</b></div>}
         <div><span>Posizioni</span><b>{ex.positions.length} / {ex.max_positions}</b></div>
         <div><span>Per operazione</span><b>{ex.margin_usdc} USDC</b></div>
-        <div><span>Chiusura</span><b style={{ fontSize: 14 }}>{ex.use_tp ? `TP +${ex.tp_pct}% · ` : "inversione 4 ore · "}SL −{ex.sl_pct}% con leva</b></div>
+        <div><span>Chiusura</span><b style={{ fontSize: 14 }}>{ex.use_tp ? `TP +${ex.tp_pct}% · ` : "inversione 4 ore · "}SL −{ex.sl_pct}%, da +{ex.lock_trigger_pct}% protegge +{ex.lock_profit_pct}% (con leva)</b></div>
         <label className="switch" style={{ marginLeft: "auto" }}>
           <input type="checkbox" checked={ex.auto} onChange={toggleAuto} /> Apertura automatica
         </label>
@@ -317,7 +317,7 @@ export function Positions({ ex, onToast, realClose }: { ex: ExecutorView | null;
                         <div className="z" style={{ left: `${zero}%` }} />
                         <div className="m" style={{ left: `${Math.min(zero, at)}%`, width: `${Math.abs(at - zero)}%`, background: p.lev_move >= 0 ? "var(--long)" : "var(--short)" }} />
                       </div>
-                      <span className="faint" style={{ fontSize: 11 }}>{signed(p.lev_move, 2)}% leva · SL {price(p.sl)} · liq {price(p.liq)}</span>
+                      <span className="faint" style={{ fontSize: 11 }}>{signed(p.lev_move, 2)}% leva · {p.locked ? <span className="long">SL protetto +{ex.lock_profit_pct}%</span> : "SL"} {price(p.sl)} · liq {price(p.liq)}</span>
                     </td>
                     <td style={{ fontSize: 12 }}>
                       {p.p_dir_now != null ? (
