@@ -17,8 +17,8 @@ import time
 
 import numpy as np
 
-from ..config import HORIZONS, settings
-from ..predict.probability import predicted_dip
+from ..config import HORIZONS, TIMEFRAMES, settings
+from ..predict.probability import horizon_index, predicted_dip
 from .indicators import indicator_view, pattern_analogs
 
 log = logging.getLogger("checker")
@@ -88,7 +88,13 @@ class Checker:
         if not m or not c4 or len(bars15) < 64 or len(bars5) < 12:
             return None
         step = HORIZONS["4h"][2]
-        closes = c4["paths"][:, step - 1, 3]
+        now = time.time()
+        L = c4["paths"].shape[1]
+        i4 = horizon_index(c4["bar_t"], 900, step, L, now)  # 4 hours from now, even if the forecast is a few bars old
+        if i4 is None:
+            return None
+        elapsed = i4 - (step - 1)  # 15m bars closed since the forecast was computed
+        closes = c4["paths"][:, i4, 3]
         # Probabilities are measured against the LIVE price, not the price at the time Kronos ran:
         # if the market already moved toward the forecast, the remaining upside is what matters.
         price = self.feed.store.last_price(sym) or c4["last"]
@@ -99,11 +105,11 @@ class Checker:
         median_4h = float(np.median(closes))
         drift = price / c4["last"] - 1  # how far the price moved since the forecast was computed
         # 8 hours: the tail of the same 15m projection (32 steps)
-        n8 = min(c4["paths"].shape[1], 32)
-        closes8 = c4["paths"][:, n8 - 1, 3]
+        i8 = horizon_index(c4["bar_t"], 900, 32, L, now)
+        closes8 = c4["paths"][:, L - 1 if i8 is None else i8, 3]  # older forecast: its tail is the farthest it reaches
         p_up_8h = float((closes8 > price).mean())
         # predicted entry point: lowest point of the median path before the 4h horizon
-        dip_price, dip_step = predicted_dip(c4["paths"], step)
+        dip_price, dip_step = predicted_dip(c4["paths"][:, elapsed:], step)  # only bars still ahead of now
         entry_ok = price <= dip_price * (1 + settings.entry_tolerance)
         ind = indicator_view(bars15)
 
@@ -173,9 +179,10 @@ class Checker:
         for h in ("15m", "30m", "1h", "4h"):
             _, tf, st = HORIZONS[h]
             ch = self.predictor.cache.get((sym, tf))
-            if not ch:
+            ih = horizon_index(ch["bar_t"], TIMEFRAMES[tf], st, ch["paths"].shape[1], time.time()) if ch else None
+            if ih is None:
                 continue
-            cl = ch["paths"][:, st - 1, 3]
+            cl = ch["paths"][:, ih, 3]
             pu = float((cl > price).mean())
             sd = 1 if pu >= 0.5 else -1
             cf = max(pu, 1 - pu)

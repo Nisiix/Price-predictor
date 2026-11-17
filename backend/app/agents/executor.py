@@ -32,7 +32,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from ..config import settings
-from ..predict.probability import trade_levels
+from ..predict.probability import horizon_index, trade_levels
 
 log = logging.getLogger("executor")
 _ids = itertools.count(1)
@@ -248,7 +248,10 @@ class Executor:
             return False, "nessuna previsione a 4 ore disponibile"
         if time.time() - c["ts"] > settings.max_forecast_age_s:
             return False, "previsione a 4 ore troppo vecchia"
-        closes = c["paths"][:, HORIZONS["4h"][2] - 1, 3]
+        i4 = horizon_index(c["bar_t"], 900, HORIZONS["4h"][2], c["paths"].shape[1], time.time())
+        if i4 is None:
+            return False, "previsione a 4 ore troppo vecchia"
+        closes = c["paths"][:, i4, 3]  # 4 hours from now, compared with the live price
         p_dir = float((closes > price).mean()) if side > 0 else float((closes < price).mean())
         median = float(np.median(closes))
         costs = 2 * (settings.taker_fee + settings.slippage)

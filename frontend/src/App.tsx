@@ -221,7 +221,7 @@ export default function App() {
                 {fan ? <span className="note">Proiezione Kronos fino a {fmtDur(fan.q50.length * TF_SECONDS[tf])} su {TF_NAME[tf]}, orizzonte {horizonName(horizon)} segnato sul grafico, aggiornata {Math.round(fan.age)}s fa{fan.source !== "kronos" ? " (stima statistica)" : ""}</span>
                   : <span className="note">{tf === "5s" ? "Le candele da 5 secondi si formano dai tick live: servono circa 4 minuti dopo l'avvio." : "Previsione in calcolo per questo token."}</span>}
               </div>
-              <Chart bars={liveBars} fan={fan} levels={levels} tfSeconds={TF_SECONDS[tf]} resetKey={`${focus}:${tf}`} markStep={steps} markLabel={horizonName(horizon)} />
+              <Chart bars={liveBars} fan={fan} levels={levels} tfSeconds={TF_SECONDS[tf]} resetKey={`${focus}:${tf}`} markStep={hstat?.tf === tf && hstat.path_step ? hstat.path_step : steps} markLabel={horizonName(horizon)} />
               <div className="legend">
                 <span><i style={{ background: "var(--kronos)", opacity: 0.35 }} />80% dei futuri campionati</span>
                 <span><i style={{ background: "var(--kronos)", opacity: 0.6 }} />50% centrale</span>

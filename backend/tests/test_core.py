@@ -311,7 +311,8 @@ def test_entry_rejected_when_price_already_above_the_forecast():
     ex.predictor = Pred()
     n, L = 24, 16
     paths = np.full((n, L, 4), 101.0)  # forecast made at 99.0: 4h median 101
-    Pred.cache[("PERP_SOL_USDC", "15m")] = {"ts": time.time(), "last": 99.0, "paths": paths}
+    bar_t = time.time() // 900 * 900 - 900  # fresh: computed in the 15m bar now forming
+    Pred.cache[("PERP_SOL_USDC", "15m")] = {"ts": time.time(), "last": 99.0, "paths": paths, "bar_t": bar_t}
     ok, why = ex.forecast_still_valid("PERP_SOL_USDC", 1, 100.0)
     assert ok  # 101 > 100 + costs, all samples above
     ok, why = ex.forecast_still_valid("PERP_SOL_USDC", 1, 101.5)  # price already above the forecast
@@ -373,3 +374,15 @@ def test_unreadable_simulated_account_starts_fresh(tmp_path):
     ex = Executor(FakeFeed(100.0), FakeChecker(), FakeController(), FakeBus(), state)
     assert not ex.restored
     assert ex.balance == settings.paper_start_balance
+
+
+def test_horizon_index_moves_along_an_older_forecast():
+    from app.predict.probability import horizon_index
+    bar_t = 1_000_000.0  # last closed 1m bar when Kronos ran; the bar forming then closes at bar_t + 120
+    # fresh forecast (inside the bar that was forming): the 1-minute horizon is the first step
+    assert horizon_index(bar_t, 60, 1, 30, bar_t + 60 + 10) == 0
+    # 6 bars later the same horizon is read 6 steps further along the paths
+    assert horizon_index(bar_t, 60, 1, 30, bar_t + 60 + 6 * 60 + 5) == 6
+    assert horizon_index(bar_t, 60, 15, 30, bar_t + 60 + 6 * 60 + 5) == 20
+    # the forecast does not reach 15 minutes from now any more
+    assert horizon_index(bar_t, 60, 15, 30, bar_t + 60 + 16 * 60) is None

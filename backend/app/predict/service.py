@@ -42,7 +42,7 @@ def _saved_model_key() -> str:
     return "base"
 from ..market.feed import MarketFeed
 from .engine import KronosEngine, SeriesInput, monte_carlo_paths
-from .probability import best_trade, fan, horizon_stats
+from .probability import best_trade, fan, horizon_index, horizon_stats
 
 log = logging.getLogger("predict")
 
@@ -243,15 +243,17 @@ class PredictionService:
         """Per-horizon distribution assembled from the cached timeframes."""
         out = {}
         last = self.feed.store.last_price(sym)
+        now = time.time()
         for label, (secs, tf, step) in HORIZONS.items():
             c = self.cache.get((sym, tf))
-            if not c or not last:
+            i = horizon_index(c["bar_t"], TIMEFRAMES[tf], step, c["paths"].shape[1], now) if c else None
+            if not c or not last or i is None:
                 out[label] = None
                 continue
-            # paths were anchored on the price at inference time; express as returns vs that price
-            st = horizon_stats(c["paths"], last, step)  # vs the live price, not the price at inference time
+            # the close `step` bars ahead of now (an older forecast is read further along), vs the live price
+            st = horizon_stats(c["paths"], last, i + 1)
             st.update({
-                "tf": tf, "step": step, "seconds": secs, "source": c["source"], "age": time.time() - c["ts"],
+                "tf": tf, "step": step, "path_step": i + 1, "seconds": secs, "source": c["source"], "age": now - c["ts"],
                 "experimental": label in EXPERIMENTAL_HORIZONS, "accuracy": self.calib.summary().get(label),
             })
             out[label] = st
@@ -264,9 +266,10 @@ class PredictionService:
         now = time.time()
         for sym in self.active_symbols():
             c = self.cache.get((sym, tf))
-            if not c:
+            i = horizon_index(c["bar_t"], TIMEFRAMES[tf], step, c["paths"].shape[1], now) if c else None
+            if i is None:
                 continue
-            closes = c["paths"][:, step - 1, 3]
+            closes = c["paths"][:, i, 3]
             live = self.feed.store.last_price(sym) or c["last"]
             p_up = float((closes > live).mean())
             rows[sym] = {

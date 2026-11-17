@@ -7,7 +7,7 @@ export type Market = {
 };
 export type HorizonStat = {
   p_up: number; exp_ret: number; q10: number; q50: number; q90: number; price_q10: number; price_q50: number;
-  price_q90: number; tf: string; step: number; seconds: number; source: string; age: number; experimental: boolean;
+  price_q90: number; tf: string; step: number; path_step?: number; seconds: number; source: string; age: number; experimental: boolean;
   accuracy?: { n: number; hit_rate: number; brier: number; coverage: number } | null;
 };
 export type Fan = { t: number[]; q10: number[]; q25: number[]; q50: number[]; q75: number[]; q90: number[]; anchor: number; bar_t: number; source: string; age: number };

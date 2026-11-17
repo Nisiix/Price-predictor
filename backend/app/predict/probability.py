@@ -4,6 +4,16 @@ from __future__ import annotations
 import numpy as np
 
 
+def horizon_index(bar_t: float, tf_seconds: float, step: int, length: int, now: float) -> int | None:
+    """Index in the sampled paths of the close `step` bars ahead of NOW, for a forecast made from the closed bar
+    opening at `bar_t`. Path index 0 is the bar that was forming when Kronos ran; every bar that has closed since
+    then moves the horizon one index further, so an older forecast is read further along its paths instead of
+    comparing an already elapsed step with the live price. None when the forecast does not reach that far."""
+    elapsed = max(0, int((now - bar_t - tf_seconds) // tf_seconds))  # bars closed after the forecast's origin bar
+    i = step - 1 + elapsed
+    return i if 0 <= i < length else None
+
+
 def horizon_stats(paths: np.ndarray, last: float, step: int) -> dict:
     """Distribution of the close `step` bars ahead. paths: (S, L, 4)."""
     closes = paths[:, step - 1, 3]
