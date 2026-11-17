@@ -212,13 +212,17 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
         <div className="scroll" style={{ maxHeight: 380, overflowY: "auto" }}>
           <table className="t">
             <thead>
-              <tr><th>Token</th><th>Kronos 4 ore</th><th>Leva</th>{withPattern && <th className="n">Pattern</th>}<th className="n">Rischio</th><th className="n">Punteggio</th><th>Range 4 ore</th><th>Esito</th></tr>
+              <tr><th>Token</th><th>Kronos 4 ore</th><th>8 ore</th><th>Ingresso previsto</th><th>Leva</th>{withPattern && <th className="n">Pattern</th>}<th className="n">Rischio</th><th className="n">Punteggio</th><th>Range 4 ore</th><th>Esito</th></tr>
             </thead>
             <tbody>
               {ranking.map((r) => (
                 <tr key={r.symbol} className={`clickable ${focus === r.symbol ? "cur" : ""}`} onClick={() => onFocus(r.symbol)}>
                   <td><b>{r.base}</b>{r.drop_priority > 0 && <span className="droptag" title="Calo recente oltre il 5%: precedenza in apertura">↓{(r.drop_priority * 100).toFixed(1)}% {r.drop_window}</span>}</td>
                   <td className={r.side}>{r.side === "long" ? "▲ rialzo" : "▼ ribasso"} {pct(r.conf_4h)}</td>
+                  <td className={r.p_up_8h >= 0.5 ? "long" : "short"}>{r.p_up_8h >= 0.5 ? "▲" : "▼"} {pct(Math.max(r.p_up_8h, 1 - r.p_up_8h))}</td>
+                  <td title={`Punto più basso previsto da Kronos nelle prossime 4 ore, tra circa ${r.dip_minutes} min`}>
+                    {price(r.dip_price)} {r.entry_ok ? <span className="long">· raggiunto</span> : <span className="faint">· {signed((r.dip_price / r.price - 1) * 100, 2)}%</span>}
+                  </td>
                   <td>{r.leverage}x</td>
                   {withPattern && <td className="n">{r.analog_win != null ? pct(r.analog_win) : "–"}</td>}
                   <td className="n" style={{ color: riskColor(r.extra_risk) }}>{pct(r.extra_risk)}</td>
@@ -232,7 +236,7 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
         </div>
       )}
       <p className="note" style={{ marginTop: 8 }}>
-        L'Executor apre solo long, quando la probabilità di rialzo a 4 ore supera il 70% (il rischio decide la leva) e il prezzo è nella fascia evidenziata, oppure anche fuori fascia se il rischio è basso (sotto il 35%); i token con un calo oltre il 5% in 4, 8 o 12 ore hanno la precedenza:
+        L'Executor apre solo long, quando la probabilità di rialzo supera il 70% sia a 4 sia a 8 ore (il rischio decide la leva) e il prezzo arriva al punto più basso previsto da Kronos; prima di entrare ricalcola la previsione e rinvia se ne vede un ribasso ulteriore; i token con un calo oltre il 5% in 4, 8 o 12 ore hanno la precedenza:
         vicino al minimo delle ultime 4 ore per un long, vicino al massimo per uno short. Seleziona una riga per l'analisi completa.
       </p>
     </div>

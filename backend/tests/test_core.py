@@ -314,3 +314,13 @@ def test_entry_rejected_when_price_already_above_the_forecast():
     assert not ok and "probabilit" in why or "mediana" in why
     Pred.cache[("PERP_SOL_USDC", "15m")]["ts"] = time.time() - 3600
     assert not ex.forecast_still_valid("PERP_SOL_USDC", 1, 100.0)[0]  # stale forecast
+
+
+def test_predicted_dip_finds_the_low_before_the_rise():
+    from app.predict.probability import predicted_dip
+
+    lows = np.array([99.5, 99.0, 98.6, 98.9, 99.8, 100.5])
+    paths = np.zeros((10, 6, 4))
+    paths[:, :, 2] = lows
+    price, i = predicted_dip(paths, 6)
+    assert price == pytest.approx(98.6) and i == 2

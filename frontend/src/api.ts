@@ -25,6 +25,7 @@ export type CheckerRow = {
   p_up_4h: number; conf_4h: number; range_pos: number; in_zone: boolean;
   horizons: HorizonPick[]; best_h: HorizonPick | null;
   drops: Record<string, number>; drop_priority: number; drop_window: string | null;
+  p_up_8h: number; dip_price: number; dip_minutes: number; entry_ok: boolean;
 };
 export type Position = {
   id: string; symbol: string; base: string; side: "long" | "short"; leverage: number; margin: number; entry: number;

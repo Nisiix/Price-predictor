@@ -112,6 +112,7 @@ class Executor:
         self.predictor = None  # set by main, to prioritise open positions
         self.venue_equity: float | None = None  # real account collateral (reported by the browser)
         self.paper_started = time.time()
+        self._confirming: set[str] = set()
         self.equity_hist: list[tuple[float, float]] = []  # (ts, paper equity) every 30 s, last 12 h
         self._last_hist = 0.0
         self.venue_rows: list[dict] = []
@@ -269,7 +270,7 @@ class Executor:
             return
         side = 1 if sig["side"] == "long" else -1
         snapshot = {k: sig.get(k) for k in ("kronos_p_tp", "kronos_p_sl", "combined_prob", "extra_risk", "score", "ev",
-                                            "source", "p_up_4h", "conf_4h", "range_pos")}
+                                            "source", "p_up_4h", "conf_4h", "range_pos", "p_up_8h", "dip_price")}
         snapshot["regime"] = sig["indicators"]["regime"]
         snapshot["rsi"] = sig["indicators"]["rsi"]
         snapshot["analog_win"] = sig.get("analog_dir")
@@ -497,14 +498,43 @@ class Executor:
         ok, _ = self.can_open()
         if not ok:
             return
+        if self._confirming:
+            return  # one confirmation at a time: sizing must see the previous opening first
         held = {p.symbol for p in self.open_positions()} | {i["symbol"] for i in self.intents.values()}
         for sig in self.checker.signals():
             if sig["symbol"] in held or self.cooldown.get(sig["symbol"], 0) > time.time():
                 continue
-            if sig["age"] > 900:
+            if sig["age"] > settings.max_forecast_age_s:
                 continue  # stale forecast
-            await self.open_from_signal(sig)
+            self._confirming.add(sig["symbol"])
+            asyncio.create_task(self._confirm_and_open(sig))
             return  # one per cycle
+
+    async def _confirm_and_open(self, sig: dict) -> None:
+        """Before entering, run Kronos again on the token and re-evaluate: enter only if the fresh forecast
+        still says this is the entry point, not if it now shows a further drop ahead."""
+        sym = sig["symbol"]
+        try:
+            if self.predictor is not None:
+                fresh = await asyncio.to_thread(self.predictor._run_tf, sym, "15m")
+                if fresh:
+                    self.predictor.cache[(sym, "15m")] = fresh
+            new = await asyncio.to_thread(self.checker.evaluate, sym)
+            if not new or not new["eligible"]:
+                why = ", ".join(new["reasons"]) if new else "previsione non disponibile"
+                self.cooldown[sym] = time.time() + 180
+                self.bus.agent_log("Executor", f"{sig['base']}: previsione ricalcolata prima dell'ingresso, rinvio ({why})", "info")
+                return
+            self.bus.agent_log(
+                "Executor",
+                f"{sig['base']}: previsione ricalcolata, punto d'ingresso confermato (4 ore {new['conf_4h'] * 100:.0f}%, "
+                f"8 ore {new['p_up_8h'] * 100:.0f}% di rialzo)", "info",
+            )
+            await self.open_from_signal(new)
+        except Exception:
+            log.exception("confirmation before entry failed for %s", sym)
+        finally:
+            self._confirming.discard(sym)
 
     # ------------------------------------------------------------- real mode
     def _intent(self, payload: dict) -> dict:

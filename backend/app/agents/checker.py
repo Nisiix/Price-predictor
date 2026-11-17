@@ -18,6 +18,7 @@ import time
 import numpy as np
 
 from ..config import HORIZONS, settings
+from ..predict.probability import predicted_dip
 from .indicators import indicator_view, pattern_analogs
 
 log = logging.getLogger("checker")
@@ -94,6 +95,13 @@ class Checker:
         exp_ret = float((closes / price - 1).mean())
         median_4h = float(np.median(closes))
         drift = price / c4["last"] - 1  # how far the price moved since the forecast was computed
+        # 8 hours: the tail of the same 15m projection (32 steps)
+        n8 = min(c4["paths"].shape[1], 32)
+        closes8 = c4["paths"][:, n8 - 1, 3]
+        p_up_8h = float((closes8 > price).mean())
+        # predicted entry point: lowest point of the median path before the 4h horizon
+        dip_price, dip_step = predicted_dip(c4["paths"], step)
+        entry_ok = price <= dip_price * (1 + settings.entry_tolerance)
         ind = indicator_view(bars15)
 
         cached = self._analog_cache.get((sym, "4h"))
@@ -131,10 +139,11 @@ class Checker:
             reasons.append("rischio aggiuntivo alto")
         if score < settings.min_signal_score:
             reasons.append("punteggio sotto soglia")
-        zone_bypass = not in_zone and extra_risk < settings.zone_bypass_risk
-        if not in_zone and not zone_bypass:
-            reasons.append("in attesa: prezzo lontano dal " + ("minimo" if side > 0 else "massimo")
-                           + f" delle 4 ore e rischio non basso (≥{settings.zone_bypass_risk * 100:.0f}%)")
+        zone_bypass = False  # the 4h-range zone is replaced by the predicted entry point
+        if side > 0 and p_up_8h <= settings.min_confidence_8h:
+            reasons.append(f"previsione a 8 ore non oltre il {settings.min_confidence_8h * 100:.0f}% di rialzo")
+        if side > 0 and not entry_ok:
+            reasons.append(f"in attesa del punto d'ingresso previsto ({dip_price:.6g}, tra circa {(dip_step + 1) * 15} min)")
         costs = 2 * (settings.taker_fee + settings.slippage)
         if side > 0 and median_4h <= price * (1 + costs):
             reasons.append("prezzo attuale già sopra la mediana prevista a 4 ore")
@@ -189,6 +198,7 @@ class Checker:
             "p_up_4h": p_up, "conf_4h": conf, "exp_ret_4h": exp_ret, "median_4h": median_4h,
             "forecast_price": c4["last"], "drift": drift,
             "range_pos": range_pos, "range_hi": hi4, "range_lo": lo4, "in_zone": in_zone, "zone_bypass": zone_bypass,
+            "p_up_8h": p_up_8h, "dip_price": dip_price, "dip_minutes": (dip_step + 1) * 15, "entry_ok": entry_ok,
             "kronos_p_tp": conf,  # probability used by the Controller buckets
             "kronos_p_sl": 1 - conf, "kronos_p_liq": best["p_liq"] if best else 0.0,
             "ev": exp_ret * side * lev,
@@ -225,7 +235,8 @@ class Checker:
                                   "kronos_p_tp", "kronos_p_sl", "kronos_p_liq", "ev", "combined_prob",
                                   "extra_risk", "score", "eligible", "reasons", "source", "max_leverage",
                                   "p_up_4h", "conf_4h", "range_pos", "in_zone", "horizons", "best_h",
-                                  "drops", "drop_priority", "drop_window")} | {
+                                  "drops", "drop_priority", "drop_window", "p_up_8h", "dip_price", "dip_minutes",
+                                  "entry_ok")} | {
             "rsi": ind["rsi"], "regime": ind["regime"], "flags": ind["flags"], "ind_score": ind["score"],
             "analog_win": r["analog_dir"], "analog_n": r["analogs"].get("n", 0),
         }
