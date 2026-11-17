@@ -138,7 +138,8 @@ class Executor:
         return p
 
     def can_open(self) -> tuple[bool, str]:
-        if len(self.open_positions()) >= settings.max_positions:
+        opening = sum(1 for i in self.intents.values() if i["action"] == "open")
+        if len(self.open_positions()) + opening >= settings.max_positions:
             return False, f"già {settings.max_positions} posizioni aperte"
         if self.mode == "paper" and self.balance < settings.margin_usdc:
             return False, "saldo simulato insufficiente"
@@ -317,6 +318,14 @@ class Executor:
         })
         self.bus.agent_log("Executor", f"Richiesta ordine REALE {('LONG' if side > 0 else 'SHORT')} {m.base} {lev}x inviata alla dashboard per la firma", "warn")
 
+    def claim(self, iid: str) -> bool:
+        """First browser tab to claim an intent executes it; the others skip it."""
+        it = self.intents.get(iid)
+        if not it or it.get("claimed"):
+            return False
+        it["claimed"] = time.time()
+        return True
+
     def ack(self, iid: str, ok: bool, fill_price: float | None = None, qty: float | None = None,
             order_id: str | None = None, error: str | None = None) -> dict:
         intent = self.intents.pop(iid, None)
@@ -324,6 +333,11 @@ class Executor:
             return {"ok": False, "error": "intent sconosciuto o scaduto"}
         if not ok:
             self.bus.agent_log("Executor", f"Ordine reale fallito su {intent['symbol']}: {error}", "danger")
+            if intent["action"] == "open":
+                # never retry blindly with real money: cool the token down and stop automatic real trading
+                self.cooldown[intent["symbol"]] = time.time() + 900
+                self.real_auto = False
+                self.bus.agent_log("Executor", "Trading automatico reale disattivato dopo un errore: controlla e riattivalo dalla dashboard", "warn")
             if intent["action"] == "close":
                 p = self.positions.get(intent["position_id"])
                 if p:
@@ -363,7 +377,7 @@ class Executor:
 
     def _expire_intents(self) -> None:
         for iid, it in list(self.intents.items()):
-            if time.time() - it["ts"] > 30:
+            if time.time() - it["ts"] > (90 if it.get("claimed") else 30):
                 self.intents.pop(iid)
                 self.bus.agent_log("Executor", f"Richiesta reale scaduta senza firma ({it['action']} {it['symbol']})", "warn")
                 if it["action"] == "close":

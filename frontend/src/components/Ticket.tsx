@@ -49,7 +49,7 @@ export function Ticket({ m, snap, ex, real, onToast }: { m: Market | undefined; 
         );
         if (!ok) return;
         await real.openReal({ symbol: m.symbol, side, leverage: lev, margin, type: type === "market" ? "MARKET" : "LIMIT", limit: Number(limit) || undefined, tp: tpV, sl: slV });
-        onToast(type === "market" ? `Posizione reale aperta su ${m.base}` : `Ordine limite reale inviato su ${m.base}: imposta TP/SL dopo l'esecuzione`);
+        onToast(type === "market" ? `Posizione reale aperta su ${m.base}` : `Ordine limite reale inviato su ${m.base}: TP e SL vengono piazzati appena viene eseguito`);
       } else {
         const r = await postJSON("/api/order", { symbol: m.symbol, side, leverage: lev, margin, order_type: type, limit: Number(limit) || null, tp: tpV, sl: slV });
         onToast(r.ok ? (type === "market" ? `Posizione simulata aperta su ${m.base}` : `Ordine limite simulato inserito su ${m.base}`) : r.error);
@@ -155,6 +155,21 @@ export function WalletPanel({ real, ex }: { real: Real; ex: ExecutorView | null 
                         <td className="n">{price(r.average_open_price)}</td>
                         <td className={`n ${r.unsettled_pnl >= 0 ? "long" : "short"}`}>{signed(r.unsettled_pnl ?? 0)}</td>
                         <td className="n"><button className="ghost danger" onClick={() => window.confirm(`Chiudere a mercato la posizione reale su ${r.symbol.split("_")[1]}?`) && real.closeReal(r.symbol)}>Chiudi</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {real.orders.length > 0 && (
+                <table className="t">
+                  <thead><tr><th>Ordine aperto</th><th className="n">Qty</th><th className="n">Prezzo</th><th /></tr></thead>
+                  <tbody>
+                    {real.orders.map((o) => (
+                      <tr key={o.order_id}>
+                        <td className={o.side === "BUY" ? "long" : "short"}>{o.symbol.split("_")[1]} {o.side === "BUY" ? "long" : "short"} {o.type === "LIMIT" ? "limite" : o.type}</td>
+                        <td className="n">{o.quantity}</td>
+                        <td className="n">{price(o.price)}</td>
+                        <td className="n"><button className="ghost" onClick={() => real.cancelOrder(o.symbol, o.order_id)}>Annulla</button></td>
                       </tr>
                     ))}
                   </tbody>

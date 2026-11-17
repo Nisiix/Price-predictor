@@ -6,6 +6,16 @@ import { getPhantom, solBalance } from "./phantom";
 
 export type Venue = { rows: any[]; free_collateral: number; total_collateral_value: number; margin_ratio: number } | null;
 
+// TP/SL for real limit orders, attached on the venue once the order fills
+const PENDING_KEY = "pp.pendingTpSl.v1";
+type PendingTpSl = Record<string, { long: boolean; tp?: number; sl?: number; ts: number }>;
+function readPending(): PendingTpSl {
+  try { return JSON.parse(localStorage.getItem(PENDING_KEY) || "{}"); } catch { return {}; }
+}
+function writePending(p: PendingTpSl) {
+  try { localStorage.setItem(PENDING_KEY, JSON.stringify(p)); } catch { /* ignore */ }
+}
+
 /**
  * Wallet + delegated-key lifecycle and execution of the Executor's real intents.
  * Real orders are only sent when the user switched on automatic real trading
@@ -16,6 +26,7 @@ export function useRealTrading(executor: ExecutorView | null, markets: Market[])
   const [address, setAddress] = useState<string | null>(null);
   const [client, setClient] = useState<OrderlyClient | null>(null);
   const [venue, setVenue] = useState<Venue>(null);
+  const [orders, setOrders] = useState<any[]>([]);
   const [sol, setSol] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -103,6 +114,27 @@ export function useRealTrading(executor: ExecutorView | null, markets: Market[])
         if (!alive) return;
         setVenue(p);
         postJSON("/api/real/positions", { rows: p.rows }).catch(() => {});
+        // attach TP/SL to limit orders that have filled
+        const pend = readPending();
+        let changed = false;
+        for (const [sym, t] of Object.entries(pend)) {
+          const row = p.rows.find((r) => r.symbol === sym && Math.abs(r.position_qty) > 0);
+          if (row) {
+            try {
+              await client.positionTpSl(sym, row.position_qty > 0, t.tp, t.sl);
+            } catch (e: any) {
+              setError(`TP/SL non impostati su ${sym.split("_")[1]}: ${e?.message ?? e}`);
+            }
+            delete pend[sym];
+            changed = true;
+          } else if (Date.now() - t.ts > 7 * 86400_000) {
+            delete pend[sym];
+            changed = true;
+          }
+        }
+        if (changed) writePending(pend);
+        const o = await client.openOrders();
+        if (alive) setOrders(o.rows ?? []);
       } catch (e: any) {
         if (alive) setError(`Raydium Perps: ${e?.message ?? e}`);
       }
@@ -129,9 +161,20 @@ export function useRealTrading(executor: ExecutorView | null, markets: Market[])
         symbol: o.symbol, side: o.side === "long" ? "BUY" : "SELL", type: o.type, qty,
         price: o.type === "LIMIT" && o.limit ? roundPrice(o.limit, m.quote_tick) : undefined,
       });
-      if (o.type === "MARKET" && (o.tp || o.sl)) {
+      // From here the order exists on the venue: never throw, so callers always track the position.
+      const tp = o.tp ? roundPrice(o.tp, m.quote_tick) : undefined;
+      const sl = o.sl ? roundPrice(o.sl, m.quote_tick) : undefined;
+      let tpslError: string | null = null;
+      if (o.type === "MARKET" && (tp || sl)) {
         await new Promise((r) => setTimeout(r, 1200));
-        await client.positionTpSl(o.symbol, o.side === "long", o.tp ? roundPrice(o.tp, m.quote_tick) : undefined, o.sl ? roundPrice(o.sl, m.quote_tick) : undefined);
+        try {
+          await client.positionTpSl(o.symbol, o.side === "long", tp, sl);
+        } catch (e: any) {
+          tpslError = e?.message ?? String(e);
+          setError(`Posizione aperta ma TP/SL non impostati sul mercato (${tpslError}): l'Executor la sorveglia comunque, verifica su perps.raydium.io`);
+        }
+      } else if (o.type === "LIMIT" && (tp || sl)) {
+        writePending({ ...readPending(), [o.symbol]: { long: o.side === "long", tp, sl, ts: Date.now() } });
       }
       let fill = ref;
       try {
@@ -142,7 +185,7 @@ export function useRealTrading(executor: ExecutorView | null, markets: Market[])
       } catch {
         /* keep reference price */
       }
-      return { orderId: String(res.order_id), qty, fill };
+      return { orderId: String(res.order_id), qty, fill, tpslError };
     },
     [client],
   );
@@ -160,18 +203,24 @@ export function useRealTrading(executor: ExecutorView | null, markets: Market[])
   useEffect(() => {
     if (!executor?.real_auto || !client?.ready) return;
     for (const it of executor.intents as Intent[]) {
-      if (handled.current.has(it.id)) continue;
+      if (handled.current.has(it.id) || (it as any).claimed) continue;
       handled.current.add(it.id);
       (async () => {
+        // only one dashboard tab may execute an intent
+        const claim = await postJSON<{ ok: boolean }>("/api/real/claim", { intent_id: it.id }).catch(() => ({ ok: false }));
+        if (!claim.ok) return;
+        let sent = false;
         try {
           if (it.action === "open") {
             const r = await openReal({ symbol: it.symbol, side: it.side, leverage: it.leverage!, margin: it.margin!, type: "MARKET", tp: it.tp, sl: it.sl });
+            sent = true;
             await postJSON("/api/real/ack", { intent_id: it.id, ok: true, fill_price: r.fill, qty: r.qty, order_id: r.orderId });
           } else {
             const px = await closeReal(it.symbol);
             await postJSON("/api/real/ack", { intent_id: it.id, ok: true, fill_price: px });
           }
         } catch (e: any) {
+          if (sent) return; // the order went through; only the ack failed, the venue snapshot reconciles it
           await postJSON("/api/real/ack", { intent_id: it.id, ok: false, error: e?.message ?? String(e) }).catch(() => {});
         }
       })();
@@ -179,7 +228,13 @@ export function useRealTrading(executor: ExecutorView | null, markets: Market[])
   }, [executor?.intents, executor?.real_auto, client, openReal, closeReal]);
 
   return {
-    hasPhantom: !!phantom, address, sol, ready: !!client?.ready, venue, busy, error, setError,
+    hasPhantom: !!phantom, address, sol, ready: !!client?.ready, venue, orders, busy, error, setError,
     connect, disconnect, enable, revoke, openReal, closeReal,
+    cancelOrder: async (symbol: string, id: number) => {
+      await client?.cancelOrder(symbol, id);
+      setOrders((os) => os.filter((o) => o.order_id !== id));
+      const pend = readPending();
+      if (pend[symbol]) { delete pend[symbol]; writePending(pend); }
+    },
   };
 }

@@ -75,3 +75,10 @@ frontend/src/
   App.tsx, components/  dashboard
   wallet/               Phantom, client Raydium Perps (Orderly) con chiave delegata
 ```
+
+## Limiti noti
+
+- Registrazione del conto, chiave delegata, ordini e TP/SL su Raydium Perps sono scritti seguendo l'SDK ufficiale di Orderly ma **non sono ancora stati eseguiti contro il mercato reale**. Primo passo consigliato: un ordine manuale della dimensione minima, controllando su perps.raydium.io che TP e SL compaiano, prima di accendere il trading automatico reale.
+- Con commissioni taker dello 0,06% per lato più slippage, a 20x un'operazione chiusa in take profit rende circa +2,6% del margine e una chiusa in stop loss circa −4,9%: servono più vincite che perdite per andare in pari. Il Controller mostra i numeri reali.
+- La libreria dei pattern storici copre le ultime 1000 candele da 1 minuto per token (circa 16 ore).
+- Posizioni simulate aperte e saldo simulato si azzerano al riavvio del backend; lo storico delle operazioni chiuse resta in `data/predictor.sqlite3`.

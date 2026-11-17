@@ -89,8 +89,17 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Price predictor", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-                   allow_methods=["*"], allow_headers=["*"])
+ALLOWED_ORIGINS = {"http://127.0.0.1:8000", "http://localhost:8000", "http://127.0.0.1:5173", "http://localhost:5173"}
+app.add_middleware(CORSMiddleware, allow_origins=sorted(ALLOWED_ORIGINS), allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def same_origin_only(request, call_next):
+    """Other websites open in the browser must not be able to drive the Executor."""
+    origin = request.headers.get("origin")
+    if origin and origin not in ALLOWED_ORIGINS:
+        return PlainTextResponse("origin not allowed", status_code=403)
+    return await call_next(request)
 
 
 def system_status() -> dict:
@@ -223,6 +232,15 @@ class Ack(BaseModel):
     error: str | None = None
 
 
+class Claim(BaseModel):
+    intent_id: str
+
+
+@app.post("/api/real/claim")
+def real_claim(c: Claim):
+    return {"ok": executor.claim(c.intent_id)}
+
+
 @app.post("/api/real/ack")
 def real_ack(a: Ack):
     return executor.ack(a.intent_id, a.ok, a.fill_price, a.qty, a.order_id, a.error)
@@ -251,6 +269,10 @@ def report_md():
 # ------------------------------------------------------------------ WebSocket
 @app.websocket("/ws")
 async def ws(socket: WebSocket):
+    origin = socket.headers.get("origin")
+    if origin and origin not in ALLOWED_ORIGINS:
+        await socket.close(code=1008)
+        return
     await socket.accept()
     q = bus.subscribe()
     try:

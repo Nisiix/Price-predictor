@@ -189,10 +189,12 @@ class Calibration:
             if not p1:
                 continue
             r = p1 / p0 - 1
+            if r == 0:
+                continue  # unchanged price: no direction to score (same rule as the Controller)
             up = 1.0 if r > 0 else 0.0
             s = self.stats[label]
             s["n"] += 1
-            s["hits"] += int((p_up > 0.5) == (r > 0)) if r != 0 else 0
+            s["hits"] += int((p_up > 0.5) == (r > 0))
             s["brier"] += (p_up - up) ** 2
             s["covered"] += int(q10 <= r <= q90)
             done.append({"label": label, "symbol": sym, "p_up": p_up, "ret": r})
