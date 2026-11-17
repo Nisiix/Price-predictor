@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { Board, CheckerRow, ExecutorView, HorizonStat, Market, Position, Snapshot } from "../api";
+import type { Board, CheckerRow, HorizonPick, ExecutorView, HorizonStat, Market, Position, Snapshot } from "../api";
 import { pct, postJSON, price, signed, usd } from "../api";
 
 const HORIZON_ORDER = ["15m", "30m", "1h", "4h"];
@@ -7,9 +7,19 @@ export const HORIZON_CHOICES: [string, string][] = [["15m", "15 minuti"], ["30m"
 export const horizonName = (h: string) => HORIZON_CHOICES.find(([k]) => k === h)?.[1] ?? h;
 
 // ------------------------------------------------------------------ watchlist (Checker ranking)
-export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pauseReason, board, horizon }: {
+/* The list no longer depends on the chart's horizon: each token is shown with its own best horizon
+   (best probability x (1 - risk) among 15 min, 30 min, 1 h, 4 h). With "show downward" off, the best
+   upward horizon is used, since the Executor opens longs only. Filters and sorting use that pick. */
+function pickFor(r: CheckerRow | undefined, showDown: boolean): HorizonPick | null {
+  if (!r?.horizons?.length) return null;
+  const cands = showDown ? r.horizons : r.horizons.filter((h) => h.side === "long");
+  if (!cands.length) return null;
+  return cands.reduce((a, b) => (b.score > a.score ? b : a));
+}
+
+export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pauseReason }: {
   markets: Market[]; ranking: CheckerRow[]; prices: Record<string, { p: number; c: number }>; focus: string | null;
-  onFocus: (s: string) => void; paused: boolean; pauseReason: string; board: Board | null; horizon: string;
+  onFocus: (s: string) => void; paused: boolean; pauseReason: string; board?: Board | null; horizon?: string;
 }) {
   const [q, setQ] = useState("");
   const [onlyStrong, setOnlyStrong] = useState<boolean>(() => {
@@ -40,28 +50,28 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
     try { localStorage.setItem("pp.sort", v); } catch { /* ignore */ }
   };
   const byRank = useMemo(() => new Map(ranking.map((r) => [r.symbol, r])), [ranking]);
-  const probs = board && board.h === horizon ? board.rows : {};
-  const ready = Object.keys(probs).length;
+  const ready = ranking.filter((r) => r.horizons?.length).length;
   const rows = useMemo(() => {
     const ql = q.trim().toLowerCase();
     return markets
-      .map((m) => ({ s: m.symbol, m, r: byRank.get(m.symbol), b: probs[m.symbol] }))
+      .map((m) => {
+        const r = byRank.get(m.symbol);
+        return { s: m.symbol, m, r, k: pickFor(r, showDown) };
+      })
       .filter((x) => !ql || x.m.base.toLowerCase().includes(ql) || x.m.name.toLowerCase().includes(ql))
-      // probability filter: only tokens whose forecast on the chosen horizon is above 70%, whatever the risk
-      .filter((x) => !onlyStrong || (x.b != null && x.b.conf > STRONG_PROB))
-      .filter((x) => showDown || (x.b != null && x.b.dir === "up"))
-      // tokens without the needed numbers go last, by market cap
-      .sort((a, b) => sortKey(b, sortBy) - sortKey(a, sortBy) || a.m.rank - b.m.rank);
-  }, [markets, byRank, probs, q, sortBy, onlyStrong, showDown]);
+      .filter((x) => x.k != null || (showDown && !onlyStrong)) // without a pick: still being computed, or no upward horizon
+      .filter((x) => !onlyStrong || (x.k != null && x.k.conf > STRONG_PROB))
+      .sort((a, b) => sortKey(b.k, sortBy) - sortKey(a.k, sortBy) || a.m.rank - b.m.rank);
+  }, [markets, byRank, q, sortBy, onlyStrong, showDown]);
 
   return (
     <div className="panel">
       <h2>
-        Token <small>{ready ? `probabilità a ${horizonName(horizon)}` : `calcolo le probabilità a ${horizonName(horizon)}…`}</small>
+        Token <small>{ready ? "ciascuno sul suo orizzonte migliore" : "calcolo le probabilità…"}</small>
       </h2>
       <label className="switch" style={{ padding: "0 8px", marginBottom: 6, fontSize: 12.5 }}>
         <input type="checkbox" checked={onlyStrong} onChange={(e) => toggleStrong(e.target.checked)} />
-        Solo probabilità sopra il 70% {(onlyStrong || !showDown) && ready > 0 && <span className="faint">({rows.length} di {ready})</span>}
+        Solo probabilità sopra il 70% {ready > 0 && <span className="faint">({rows.length} di {ready})</span>}
       </label>
       <label className="switch" style={{ padding: "0 8px", marginBottom: 6, fontSize: 12.5 }}>
         <input type="checkbox" checked={showDown} onChange={(e) => toggleDown(e.target.checked)} />
@@ -74,7 +84,7 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
       {paused && <p className="note warn" style={{ padding: "0 8px" }}>Nuove aperture sospese: {pauseReason}</p>}
       <input className="search" placeholder="Cerca token" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Cerca token" />
       <ul className="wl">
-        {rows.map(({ s, m, r, b }) => {
+        {rows.map(({ s, m, r, k }) => {
           const p = prices[s]?.p ?? m.mark_price;
           return (
             <li key={s}>
@@ -84,24 +94,24 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
                   {r?.eligible && <span className="go" title={`Segnale valido per l'Executor: ${r.side} ${r.leverage}x`} />}
                   {r && r.drop_priority > 0 && <span className="droptag" title="Calo recente oltre il 5%: precedenza in apertura (non cambia la decisione)">↓{(r.drop_priority * 100).toFixed(1)}% {r.drop_window}</span>}
                 </span>
-                <span className={`prob ${b ? (b.dir === "up" ? "long" : "short") : "faint"}`}>
-                  {b ? <>{b.dir === "up" ? "▲" : "▼"} {pct(b.conf)}</> : "–"}
+                <span className={`prob ${k ? k.side : "faint"}`}>
+                  {k ? <>{k.side === "long" ? "▲" : "▼"} {pct(k.conf)}</> : "–"}
                 </span>
                 <span className="meta">
                   {price(p)}
-                  {r && <span className={`side-tag ${r.side}`} title={`Checker, piano a 4 ore: ${pct(r.conf_4h)} di probabilità, rischio ${pct(r.extra_risk)}`}>{r.side === "long" ? "Long" : "Short"} {r.leverage}x</span>}
+                  {r && <span className={`side-tag ${r.side}`} title={`Checker, piano a 4 ore: ${pct(r.conf_4h)} di probabilità, rischio ${pct(r.extra_risk)}`}>4 ore: {r.side === "long" ? "Long" : "Short"} {r.leverage}x</span>}
                 </span>
-                <span className="score" title="Rischio aggiuntivo stimato dal Checker">
-                  {r ? <span style={{ color: riskColor(r.extra_risk) }}>rischio {pct(r.extra_risk)}</span> : b ? "rischio in calcolo" : "in calcolo"}
+                <span className="score" title="Rischio aggiuntivo sull'orizzonte migliore">
+                  {k ? <span style={{ color: riskColor(k.risk) }}>rischio {pct(k.risk)}</span> : "in calcolo"}
                 </span>
-                {r?.best_h && (
+                {k && r && (
                   <span
                     className="besth"
                     title={"Probabilità e rischio per orizzonte:\n" + r.horizons.map((x) => `${horizonName(x.h)}: ${x.side === "long" ? "▲" : "▼"} ${pct(x.conf)}, rischio ${pct(x.risk)}`).join("\n")}
                   >
-                    Migliore: <b>{horizonName(r.best_h.h)}</b>{" "}
-                    <span className={r.best_h.side}>{r.best_h.side === "long" ? "▲" : "▼"} {pct(r.best_h.conf)}</span>
-                    {" · "}<span style={{ color: riskColor(r.best_h.risk) }}>rischio {pct(r.best_h.risk)}</span>
+                    Migliore: <b>{horizonName(k.h)}</b>{" "}
+                    <span className={k.side}>{k.side === "long" ? "▲" : "▼"} {pct(k.conf)}</span>
+                    {" · "}<span style={{ color: riskColor(k.risk) }}>rischio {pct(k.risk)}</span>
                   </span>
                 )}
               </button>
@@ -110,7 +120,7 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
         })}
         {!rows.length && (
           <li className="empty" style={{ padding: 8 }}>
-            {q ? "Nessun token corrisponde alla ricerca." : `Nessun token ${showDown ? "" : "in rialzo "}${onlyStrong ? "supera il 70% di probabilità " : ""}a ${horizonName(horizon)}. Prova un altro orizzonte o allarga i filtri.`}
+            {q ? "Nessun token corrisponde alla ricerca." : `Nessun token ${showDown ? "" : "in rialzo "}${onlyStrong ? "supera il 70% di probabilità " : ""}su nessun orizzonte. Allarga i filtri o attendi i prossimi calcoli.`}
           </li>
         )}
       </ul>
@@ -121,12 +131,11 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
 type SortMode = "prob" | "risk" | "combo";
 const STRONG_PROB = 0.7;
 const SORTS: [SortMode, string][] = [["prob", "Probabilità"], ["risk", "Rischio più basso"], ["combo", "Probabilità e rischio"]];
-type WlRow = { m: Market; r?: CheckerRow; b?: { conf: number } };
-function sortKey(x: WlRow, mode: SortMode): number {
-  const risk = x.r?.extra_risk;
-  if (mode === "risk") return risk == null ? -1 : 1 - risk;
-  if (mode === "combo") return x.b && risk != null ? x.b.conf * (1 - risk) : -1;
-  return x.b?.conf ?? -1;
+function sortKey(k: HorizonPick | null, mode: SortMode): number {
+  if (!k) return -1;
+  if (mode === "risk") return 1 - k.risk;
+  if (mode === "combo") return k.score;
+  return k.conf;
 }
 const riskColor = (r: number) => (r > 0.5 ? "var(--short)" : r > 0.35 ? "var(--warn)" : "var(--long)");
 
