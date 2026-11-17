@@ -286,3 +286,8 @@ table.t tr.cur td:first-child { box-shadow: inset 3px 0 0 var(--kronos); }
 .wl .besth b { color: var(--kronos); font-weight: 600; }
 
 .droptag { margin-left: 6px; font-size: 11px; font-weight: 600; color: var(--warn); background: rgba(243, 184, 91, 0.12); border-radius: var(--r-chip); padding: 0 6px; white-space: nowrap; }
+
+.modelsel { gap: 4px; }
+.modelsel button { border: 0; background: none; color: var(--muted); padding: 1px 8px; border-radius: var(--r-chip); cursor: pointer; font-size: 12px; }
+.modelsel button[aria-pressed="true"] { background: var(--hull-2); color: var(--kronos); font-weight: 600; }
+.modelsel button:disabled { opacity: 0.5; cursor: wait; }

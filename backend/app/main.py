@@ -199,6 +199,22 @@ async def close_position(pid: str):
     return {"ok": True}
 
 
+class ModelChoice(BaseModel):
+    model: str  # mini | base
+
+
+@app.post("/api/model")
+async def choose_model(c: ModelChoice):
+    from .predict.service import MODELS
+
+    if c.model not in MODELS:
+        raise HTTPException(400, f"model must be one of {list(MODELS)}")
+    if c.model != predictor.model_key and not predictor.switching:
+        asyncio.create_task(predictor.switch_model(c.model))
+        bus.agent_log("Sistema", f"Cambio modello Kronos in corso: {MODELS[c.model][0].split('/')[-1]}", "info")
+    return {"ok": True, "model": predictor.model_key, "switching": c.model}
+
+
 class ExecSettings(BaseModel):
     auto: bool | None = None
     real_auto: bool | None = None

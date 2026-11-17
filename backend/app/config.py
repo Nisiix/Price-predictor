@@ -96,8 +96,7 @@ class Settings:
 
 
 settings = Settings()
-# a slower model refreshes everything less often so the CPU is not saturated (base ~10x mini on CPU)
-SCAN_FACTOR = float(os.getenv("PP_SCAN_FACTOR", "6" if "base" in settings.kronos_model.lower() else "1"))
+
 
 # Horizons shown on the dashboard: label -> (seconds, timeframe used, steps on that timeframe)
 TIMEFRAMES = {"5s": 5, "1m": 60, "5m": 300, "15m": 900}

@@ -13,7 +13,31 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
-from ..config import EXPERIMENTAL_HORIZONS, HORIZONS, PRED_LEN, SCAN_FACTOR, TIMEFRAMES, settings
+import json
+import os
+
+from ..config import DATA_DIR, EXPERIMENTAL_HORIZONS, HORIZONS, PRED_LEN, TIMEFRAMES, settings
+
+# Models the dashboard can switch between at runtime: key -> (model, tokenizer, max context, refresh factor)
+MODELS = {
+    "mini": ("NeoQuasar/Kronos-mini", "NeoQuasar/Kronos-Tokenizer-2k", 2048, 1.0),
+    "base": ("NeoQuasar/Kronos-base", "NeoQuasar/Kronos-Tokenizer-base", 512, 6.0),  # ~20x slower on CPU
+}
+MODEL_FILE = DATA_DIR / "model.json"
+
+
+def _saved_model_key() -> str:
+    env = os.getenv("PP_KRONOS_MODEL", "")
+    for k, v in MODELS.items():
+        if env == v[0]:
+            return k
+    try:
+        k = json.loads(MODEL_FILE.read_text()).get("model")
+        if k in MODELS:
+            return k
+    except Exception:
+        pass
+    return "base"
 from ..market.feed import MarketFeed
 from .engine import KronosEngine, SeriesInput, monte_carlo_paths
 from .probability import best_trade, fan, horizon_stats
@@ -29,7 +53,10 @@ BOARD_AGE = {"5s": 40.0, "1m": 90.0, "5m": 150.0, "15m": 300.0}  # refresh for t
 class PredictionService:
     def __init__(self, feed: MarketFeed) -> None:
         self.feed = feed
-        self.engine = KronosEngine(settings.kronos_model, settings.kronos_tokenizer, settings.kronos_max_context)
+        self.model_key = _saved_model_key()
+        name, tok, ctx, _ = MODELS[self.model_key]
+        self.engine = KronosEngine(name, tok, ctx)
+        self.switching: str | None = None
         self.decider = KronosEngine(settings.decision_model, settings.decision_tokenizer, 512) if settings.decision_model else None
         self.cache: dict[tuple[str, str], dict] = {}
         self.focus: set[str] = set()
@@ -87,6 +114,30 @@ class PredictionService:
             "trade": trade,
         }
 
+    @property
+    def factor(self) -> float:
+        """Refresh intervals scale with the model's CPU cost."""
+        return float(os.getenv("PP_SCAN_FACTOR", MODELS[self.model_key][3]))
+
+    async def switch_model(self, key: str) -> None:
+        """Load the other model in the background, then swap it in; forecasts refresh progressively."""
+        if key not in MODELS or key == self.model_key or self.switching:
+            return
+        self.switching = key
+        try:
+            name, tok, ctx, _ = MODELS[key]
+            eng = KronosEngine(name, tok, ctx)
+            await asyncio.to_thread(eng.load)
+            if eng.ready:
+                self.engine, self.model_key = eng, key
+                try:
+                    MODEL_FILE.write_text(json.dumps({"model": key}))
+                except Exception:
+                    pass
+                log.info("switched Kronos model to %s", name)
+        finally:
+            self.switching = None
+
     def run_decision(self, sym: str) -> dict | None:
         """4h/8h forecast with the large model (falls back to the scanning model while it loads)."""
         if self.decider is None or not self.decider.ready:
@@ -112,7 +163,7 @@ class PredictionService:
 
         for sym in list(self.focus):
             for tf in ("1m", "5m", "15m"):  # sub-minute horizons are no longer shown on the dashboard
-                if stale(sym, tf, MAX_AGE[tf] * SCAN_FACTOR) and self.feed.store.count(sym, tf) >= MIN_BARS[tf]:
+                if stale(sym, tf, MAX_AGE[tf] * self.factor) and self.feed.store.count(sym, tf) >= MIN_BARS[tf]:
                     return sym, tf
         for sym in list(self.priority):
             # open positions: keep the 4h forecast fresh for the exits, with the large model when loaded
@@ -125,7 +176,7 @@ class PredictionService:
         board_jobs = [("board", board_tfs[(self._turn // 2) % len(board_tfs)])]
         order = board_jobs + [("checker", "1m")] if self._turn % 2 else [("checker", "1m")] + board_jobs
         for kind, tf in order:
-            job = self._scan(tf, (BOARD_AGE[tf] if kind == "board" else SCAN_AGE) * SCAN_FACTOR, kind, stale)
+            job = self._scan(tf, (BOARD_AGE[tf] if kind == "board" else SCAN_AGE) * self.factor, kind, stale)
             if job:
                 return job
         return None
@@ -226,7 +277,8 @@ class PredictionService:
 
     def status(self) -> dict:
         return {
-            "model": settings.kronos_model, "ready": self.engine.ready, "error": self.engine.error,
+            "model": self.engine.model_name, "model_key": self.model_key, "switching": self.switching,
+            "models": list(MODELS), "ready": self.engine.ready, "error": self.engine.error,
             "decision_model": settings.decision_model, "decision_ready": bool(self.decider and self.decider.ready),
             "decision_error": self.decider.error if self.decider else None,
             "device": self.engine.device, "latency": self.engine.last_latency_s, "busy": self.busy_with,

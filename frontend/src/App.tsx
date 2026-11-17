@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, pct, price, signed, useLive } from "./api";
+import { api, pct, postJSON, price, signed, useLive } from "./api";
 import type { Snapshot } from "./api";
 import { Chart, fmtDur } from "./components/Chart";
 import { AgentsPage } from "./components/AgentsPage";
@@ -153,6 +153,16 @@ export default function App() {
         </div>
         <div className="status" aria-live="polite">
           <span className="chip"><span className={`dot ${live.connected && feedOk ? "ok" : live.connected ? "warn" : "bad"}`} />Prezzi {live.connected ? (feedOk ? "in tempo reale" : "in ritardo") : "disconnesso"}</span>
+          <span className="chip modelsel" title="Kronos-base è più preciso ma circa 20 volte più lento su CPU: se il PC non regge, passa a mini">
+            Modello
+            {(["mini", "base"] as const).map((k) => (
+              <button key={k} aria-pressed={sys?.kronos.model_key === k} disabled={!!sys?.kronos.switching}
+                onClick={() => postJSON("/api/model", { model: k }).then(() => setToast(k === sys?.kronos.model_key ? `Kronos-${k} già attivo` : `Carico Kronos-${k}…`)).catch(() => {})}>
+                {k}
+              </button>
+            ))}
+            {sys?.kronos.switching && <span className="faint">carico {sys.kronos.switching}…</span>}
+          </span>
           <span className="chip"><span className={`dot ${sys?.kronos.ready ? "ok" : sys?.kronos.error ? "bad" : "warn"}`} />
             {sys?.kronos.ready ? <>Kronos <b>{sys.kronos.model.split("/")[1]}</b>{sys.kronos.decision_model ? <> + <b title="Usato per le decisioni dell'Executor: ricalcolo prima dell'ingresso e uscite">{sys.kronos.decision_model.split("/")[1]}</b>{sys.kronos.decision_ready ? "" : " (in caricamento)"}</> : null} · {sys.kronos.scanned}/{sys.markets} token</> : sys?.kronos.error ? "Kronos non disponibile, stima statistica" : "Kronos in caricamento"}
           </span>

@@ -51,7 +51,7 @@ Tutto è modificabile con variabili d'ambiente (vedi `backend/app/config.py`):
 
 | Variabile | Default | Significato |
 |---|---|---|
-| `PP_DECISION_MODEL` / `PP_DECISION_TOKENIZER` | `NeoQuasar/Kronos-base` / `NeoQuasar/Kronos-Tokenizer-base` | modello più grande disponibile, usato per le decisioni dell'Executor (ricalcolo prima dell'ingresso, uscite delle posizioni aperte); vuoto per disattivarlo |
+| Selettore "Modello" in alto | base | passa tra Kronos-mini (veloce) e Kronos-base (più preciso, circa 20 volte più lento su CPU) senza riavviare; la scelta resta salvata in `data/model.json` |
 | `PP_KRONOS_MODEL` / `PP_KRONOS_TOKENIZER` | `NeoQuasar/Kronos-mini` / `NeoQuasar/Kronos-Tokenizer-2k` | `NeoQuasar/Kronos-small` con `Kronos-Tokenizer-base` è più accurato ma circa 3,5 volte più lento su CPU |
 | `PP_SAMPLES` | 24 | futuri campionati per previsione |
 | `PP_LOOKBACK` | 128 | candele passate date al modello |
