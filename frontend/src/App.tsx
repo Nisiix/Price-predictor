@@ -3,7 +3,7 @@ import { api, pct, price, signed, useLive } from "./api";
 import type { Snapshot } from "./api";
 import { Chart, fmtDur } from "./components/Chart";
 import { AgentsPage } from "./components/AgentsPage";
-import { HORIZON_CHOICES, HorizonLadder, Watchlist, horizonName } from "./components/Panels";
+import { HORIZON_CHOICES, HorizonLadder, Positions, Watchlist, horizonName } from "./components/Panels";
 import { Ticket, WalletPanel } from "./components/Ticket";
 import { useRealTrading } from "./wallet/useRealTrading";
 
@@ -218,6 +218,8 @@ export default function App() {
                 <span><i style={{ background: "none", borderTop: "2px dashed var(--kronos)", height: 0 }} />mediana</span>
               </div>
             </div>
+            {/* Executor positions right under the chart (also on the Agenti page) */}
+            <Positions ex={live.executor} onToast={setToast} realClose={realClose} />
           </section>
 
           <aside className="side">
@@ -231,7 +233,7 @@ export default function App() {
               <div className="panel">
                 <h2>Ordini</h2>
                 <p className="note">
-                  Senza wallet l'Executor apre e chiude da solo le posizioni simulate: le trovi nella sezione Agenti.
+                  Senza wallet l'Executor apre e chiude da solo le posizioni simulate: le trovi sotto il grafico.
                   Per operare davvero su Raydium Perps collega Phantom in alto a destra.
                 </p>
               </div>
