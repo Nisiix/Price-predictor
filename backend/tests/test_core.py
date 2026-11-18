@@ -570,7 +570,12 @@ def test_breakout_needs_a_large_predicted_move_and_kronos_not_against():
     assert not r["eligible"]
     assert any("ribasso" in x for x in r["reasons"])
     r = _breakout_checker(100.2, highs, p_up=0.55).evaluate("PERP_SOL_USDC")  # above 50%: no 70% rule any more
-    assert not any("Kronos" in x for x in r["reasons"])  # (the extra risk, 30% of it from Kronos, can still block)
+    assert not any("Kronos" in x for x in r["reasons"])
+    r70 = _breakout_checker(100.2, highs, p_up=0.70).evaluate("PERP_SOL_USDC")
+    assert r["extra_risk"] == pytest.approx(r70["extra_risk"])  # 50-70%: Kronos weighs on the risk as at 70%
+    assert r["eligible"] == r70["eligible"]
+    r80 = _breakout_checker(100.2, highs, p_up=0.80).evaluate("PERP_SOL_USDC")
+    assert r80["extra_risk"] < r70["extra_risk"]  # above 70% a higher probability still lowers it
 
 
 def test_order_cancelled_if_the_breakout_faded():

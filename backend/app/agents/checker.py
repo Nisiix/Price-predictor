@@ -152,7 +152,9 @@ class Checker:
         sl_move10 = settings.stop_loss_pct / 100 / 10
         noise = ind["atr_pct"] / sl_move10 if sl_move10 else 0  # 15m ATR vs the stop distance at 10x
         risk_parts = {
-            "kronos_avverso": 1 - conf,
+            # user rule: a Kronos probability between 50% and 70% weighs on the risk as 70% does (the breakout gives
+            # the direction, Kronos only has to be above 50%); only above 70% does a higher probability lower it
+            "kronos_avverso": min(1 - conf, 1 - settings.risk_conf_floor),
             "indicatori_contrari": 1 - ind_agree,
             "pattern_storici": (1 - analog_dir) if analog_dir is not None else 0.5,
             "volatilita": float(np.clip((noise - 1) / 3.0, 0, 1)),
@@ -202,7 +204,7 @@ class Checker:
             cf = max(pu, 1 - pu)
             pat = (ana["fwd_up"] if sd > 0 else 1 - ana["fwd_up"]) if ana.get("n") else None
             parts = {
-                "kronos_avverso": 1 - cf,
+                "kronos_avverso": min(1 - cf, 1 - settings.risk_conf_floor),
                 "indicatori_contrari": 1 - (1 + sd * ind["score"]) / 2,
                 "pattern_storici": (1 - pat) if pat is not None else 0.5,
                 "volatilita": risk_parts["volatilita"],

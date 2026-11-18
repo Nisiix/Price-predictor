@@ -88,6 +88,9 @@ class Settings:
     # direction comes from the breakout itself, Kronos is asked for the size of the move
     min_confidence: float = _f("PP_MIN_CONF", 0.50)
     max_risk: float = _f("PP_MAX_RISK", 0.40)  # user rule: no opening above 40% extra risk
+    # user rule (18 Nov): no extra risk for a Kronos probability between 50% and this value; below it the Kronos part of
+    # the extra risk is the one at this value, so a 55% breakout is not sized or blocked differently from a 70% one
+    risk_conf_floor: float = _f("PP_RISK_CONF_FLOOR", 0.70)
     max_forecast_age_s: float = _f("PP_MAX_FORECAST_AGE", 2700.0)  # screening age limit; the entry itself re-predicts
     longs_only: bool = os.getenv("PP_LONGS_ONLY", "1") == "1"  # user rule: the Executor opens long positions only
     # breakout entry (user rule): Kronos predicts a large move over the next 4 h, the long opens only once the price

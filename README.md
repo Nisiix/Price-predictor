@@ -67,6 +67,7 @@ Tutto è modificabile con variabili d'ambiente (vedi `backend/app/config.py`):
 | `PP_SAMPLES` / `PP_DECISION_SAMPLES` | 24 / 96 | futuri campionati per previsione: scansione e conferma prima dell'ingresso |
 | `PP_DECISION_MODEL` | vuoto | modello diverso per la conferma; vuoto = lo stesso Kronos-base |
 | (fasce di rischio) | 25% → 10%, 30% → 7%, 35% → 5%, 40% → 3% | margine per operazione come quota del capitale secondo il rischio aggiuntivo; oltre il 40% l'Executor non apre (`PP_RISK_ABOVE_40`, `PP_MAX_RISK`) |
+| `PP_RISK_CONF_FLOOR` | 0.70 | tra il 50% e il 70% di probabilità Kronos pesa sul rischio aggiuntivo come al 70%: un ingresso in rottura al 55% non viene bloccato né ridotto per la probabilità; sopra il 70% una probabilità più alta abbassa ancora il rischio |
 | `PP_MAX_TOKEN_EXPOSURE` / `PP_MAX_TOTAL_EXPOSURE` | 0.5 / 1.5 | esposizione massima (nozionale sul capitale) per token e in totale: la leva riduce il margine bloccato, non moltiplica l'esposizione |
 | `PP_LIQ_DISTANCE` | 0.5 | long: l'importo è calcolato (margine incrociato) perché la liquidazione di ogni posizione resti almeno al 50% dall'entrata |
 | `PP_MAX_POSITIONS` | 0 | limite fisso di posizioni (0 = nessuno) |
