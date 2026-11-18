@@ -277,15 +277,15 @@ def test_sizing_keeps_every_liquidation_half_the_entry_away():
     assert p1.liq <= p1.entry * 0.5 * 1.05  # the long stays far from liquidation (within the short's extra load)
 
 
-def test_signals_prioritise_recent_drops_without_changing_eligibility():
+def test_signals_put_the_largest_predicted_move_first():
     from app.agents.checker import Checker
 
     ch = Checker.__new__(Checker)
     ch.ranking = [
-        {"symbol": "A", "eligible": True, "score": 0.6, "drop_priority": 0.0},
-        {"symbol": "B", "eligible": True, "score": 0.4, "drop_priority": 0.08},
-        {"symbol": "C", "eligible": False, "score": 0.9, "drop_priority": 0.20},  # big drop but not eligible
-        {"symbol": "D", "eligible": True, "score": 0.5, "drop_priority": 0.06},
+        {"symbol": "A", "eligible": True, "score": 0.6, "amplitude": 0.016},
+        {"symbol": "B", "eligible": True, "score": 0.4, "amplitude": 0.030},
+        {"symbol": "C", "eligible": False, "score": 0.9, "amplitude": 0.050},  # largest move but not eligible
+        {"symbol": "D", "eligible": True, "score": 0.5, "amplitude": 0.020},
     ]
     assert [r["symbol"] for r in ch.signals()] == ["B", "D", "A"]
 
@@ -302,7 +302,7 @@ def test_losing_positions_are_never_closed_by_agents():
     assert ex._check(p, p.entry * 1.003, 0.5).startswith("inversione")  # in profit: closes
 
 
-def test_entry_rejected_when_price_already_above_the_forecast():
+def test_entry_rejected_when_kronos_is_against_the_long_from_the_live_price():
     feed, ctl, ex = make(price=100.0)
 
     class Pred:
@@ -317,21 +317,11 @@ def test_entry_rejected_when_price_already_above_the_forecast():
     bar_t = time.time() // 900 * 900 - 900  # fresh: computed in the 15m bar now forming
     Pred.cache[("PERP_SOL_USDC", "15m")] = {"ts": time.time(), "last": 99.0, "paths": paths, "bar_t": bar_t}
     ok, why = ex.forecast_still_valid("PERP_SOL_USDC", 1, 100.0)
-    assert ok  # 101 > 100 + costs, all samples above
-    ok, why = ex.forecast_still_valid("PERP_SOL_USDC", 1, 101.5)  # price already above the forecast
-    assert not ok and "probabilit" in why or "mediana" in why
+    assert ok  # every sample ends above 100
+    ok, why = ex.forecast_still_valid("PERP_SOL_USDC", 1, 101.5)  # price already above every path: 0% up
+    assert not ok and "probabilit" in why
     Pred.cache[("PERP_SOL_USDC", "15m")]["ts"] = time.time() - 3600
     assert not ex.forecast_still_valid("PERP_SOL_USDC", 1, 100.0)[0]  # stale forecast
-
-
-def test_predicted_dip_finds_the_low_before_the_rise():
-    from app.predict.probability import predicted_dip
-
-    lows = np.array([99.5, 99.0, 98.6, 98.9, 99.8, 100.5])
-    paths = np.zeros((10, 6, 4))
-    paths[:, :, 2] = lows
-    price, i = predicted_dip(paths, 6)
-    assert price == pytest.approx(98.6) and i == 2
 
 
 def test_risk_tiers_share_of_capital():
@@ -444,17 +434,6 @@ def test_volumes_fill_tick_built_candles():
     assert v[-1] == pytest.approx(20.0) and v[0] == 10.0
 
 
-def test_entry_point_from_each_paths_low():
-    from app.predict.probability import predicted_dip
-
-    paths = np.full((4, 6, 4), 100.0)
-    for k, (low, at) in enumerate([(97.0, 1), (98.0, 3), (99.0, 2), (96.0, 4)]):
-        paths[k, at, 2] = low
-    price, i = predicted_dip(paths, 6)
-    assert price == pytest.approx(97.5)  # median of the four path lows (the median path low would be 100)
-    assert i == 2
-
-
 def test_total_exposure_cap(monkeypatch):
     monkeypatch.setattr(settings, "max_token_exposure", 1.0)
     monkeypatch.setattr(settings, "max_total_exposure", 0.6)
@@ -512,13 +491,139 @@ def test_signal_register_and_stats(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "db_path", tmp_path / "t.sqlite3")
     ctl = Controller(FakeBus())
-    for i, (p_up, ok) in enumerate([(0.72, True), (0.78, True), (0.55, False)]):
-        ctl.record_signal({"ts": 1.0 + i, "due": 2.0, "symbol": f"S{i}", "price": 100.0, "p_up_4h": p_up, "p_up_8h": 0.6,
-                           "entry_ok": ok, "eligible": ok, "extra_risk": 0.3, "reasons": []})
-    ctl.record_signal({"ts": 1.0, "due": 2.0, "symbol": "S0", "price": 100.0, "p_up_4h": 0.72, "p_up_8h": 0.6,
-                       "entry_ok": True, "eligible": True})  # same forecast logged twice: ignored
-    assert ctl.resolve_signals(lambda s: 101.0) == 3
+    for i, (p_up, amp) in enumerate([(0.72, 0.022), (0.58, 0.012), (0.45, 0.004)]):
+        ctl.record_signal({"ts": 1.0 + i, "due": 2.0, "symbol": f"S{i}", "price": 100.0, "p_up_4h": p_up,
+                           "amplitude": amp, "eligible": False, "extra_risk": 0.3, "reasons": []})
+    ctl.record_signal({"ts": 1.0, "due": 2.0, "symbol": "S0", "price": 100.0, "p_up_4h": 0.72,
+                       "eligible": False})  # same forecast logged twice: ignored
+    ctl.record_breakout("S1", 2.0, 100.5, 3.0, False)  # breakout, not eligible (move too small)
+    ctl.record_breakout("S0", 1.0, 100.2, 3.0, False)
+    ctl.record_breakout("S0", 1.0, 100.4, 3.0, True)  # later eligible breakout of the same forecast replaces it
+    ctl.record_breakout("S0", 1.0, 100.9, 3.0, True)  # ... but only once
+    assert ctl.resolve_signals(lambda s: 101.0) == 5  # 3 forecasts + 2 breakouts
     st = ctl.signal_stats()
-    assert {g["key"] for g in st["eligible"]} == {"70-75%", "75-80%"}
+    assert [g["key"] for g in st["eligible"]] == ["70-75%"] and st["eligible"][0]["n"] == 1
+    assert st["eligible"][0]["avg_ret"] == pytest.approx(101.0 / 100.4 - 1)
+    assert sum(g["n"] for g in st["breakout"]) == 2
+    assert {g["key"] for g in st["amplitude"]} == {"<0.5%", "1-1.5%", "2-3%"}
     assert st["all"][0]["win"] == 1.0 and st["pending"] == 0
-    assert "Registro segnali" in ctl.markdown()
+    md = ctl.markdown()
+    assert "Registro segnali" in md and "ampiezza prevista" in md
+
+
+# ------------------------------------------------------------------ breakout entry
+def _breakout_checker(price, highs, p_up=0.75, move=0.03, age_bars=0):
+    """A Checker on synthetic 15m candles whose last closed hour peaks at max(highs), with a fresh Kronos forecast."""
+    from app.agents.checker import Checker
+    from app.config import TIMEFRAMES
+    from app.market.candles import CandleStore
+
+    class Feed:
+        store = CandleStore(TIMEFRAMES)
+        markets = {"PERP_SOL_USDC": FakeFeed(price).markets["PERP_SOL_USDC"]}
+
+    now = time.time()
+    cur = int(now // 900 * 900)
+    rows = []
+    for i in range(100):
+        t = cur - 900 * (100 - i)
+        h = highs[i - 96] if i >= 96 else 99.5
+        rows.append([t, 99.0, h, 98.5, 99.0, 10.0])
+    Feed.store.set_history("PERP_SOL_USDC", "15m", rows)
+    Feed.store.set_history("PERP_SOL_USDC", "5m", [[cur - 300 * (48 - i), 99.0, 99.5, 98.5, 99.0, 1.0] for i in range(48)])
+    Feed.store.update_tick("PERP_SOL_USDC", price, now)
+
+    class Pred:
+        cache = {}
+
+        def decision_cache(self, sym):
+            return self.cache.get((sym, "15m"))
+
+    n, ups = 96, int(round(p_up * 96))
+    closes = np.array([99.0 * (1 + move)] * ups + [99.0 * (1 - move)] * (n - ups))
+    paths = np.repeat(closes[:, None, None], 18, axis=1).repeat(4, axis=2)
+    Pred.cache[("PERP_SOL_USDC", "15m")] = {"ts": now, "last": 99.0, "paths": paths, "bar_t": cur - 900 * (1 + age_bars),
+                                            "source": "kronos", "trade": None, "model": "base"}
+    ch = Checker(Feed(), Pred(), FakeBus())
+    return ch
+
+
+def test_breakout_entry_only_above_the_last_hours_roof():
+    highs = [99.6, 100.0, 99.8, 99.7]  # roof 100.0
+    r = _breakout_checker(99.9, highs).evaluate("PERP_SOL_USDC")
+    assert r["roof"] == pytest.approx(100.0) and not r["breakout"] and not r["eligible"]
+    assert any("rottura del tetto" in x for x in r["reasons"])
+    r = _breakout_checker(100.05, highs).evaluate("PERP_SOL_USDC")  # above the roof but inside the 0.1% buffer
+    assert not r["breakout"]
+    r = _breakout_checker(100.2, highs).evaluate("PERP_SOL_USDC")
+    assert r["breakout"] and r["eligible"], r["reasons"]
+    assert r["amplitude"] == pytest.approx(0.03)
+    r = _breakout_checker(100.8, highs).evaluate("PERP_SOL_USDC")  # 0.8% above the roof: too late
+    assert not r["eligible"] and any("troppo tardi" in x for x in r["reasons"])
+
+
+def test_breakout_needs_a_large_predicted_move_and_kronos_not_against():
+    highs = [99.6, 100.0, 99.8, 99.7]
+    r = _breakout_checker(100.2, highs, move=0.01).evaluate("PERP_SOL_USDC")
+    assert not r["eligible"] and any("movimento previsto" in x for x in r["reasons"])
+    r = _breakout_checker(100.2, highs, p_up=0.40).evaluate("PERP_SOL_USDC")
+    assert not r["eligible"]
+    assert any("ribasso" in x for x in r["reasons"])
+    r = _breakout_checker(100.2, highs, p_up=0.55).evaluate("PERP_SOL_USDC")  # above 50%: no 70% rule any more
+    assert not any("Kronos" in x for x in r["reasons"])  # (the extra risk, 30% of it from Kronos, can still block)
+
+
+def test_order_cancelled_if_the_breakout_faded():
+    feed, ctl, ex = make(price=99.9)
+    sig = {"symbol": "PERP_SOL_USDC", "base": "SOL", "side": "long", "leverage": 10, "kronos_p_tp": 0.6, "extra_risk": 0.2,
+           "conf_4h": 0.7, "p_up_4h": 0.7, "analog_dir": 0.6, "roof": 100.0, "breakout_price": 100.1,
+           "chase_price": 100.5, "amplitude": 0.03,
+           "indicators": {"regime": "laterale", "rsi": 55}, "analogs": {"long_win": 0.5}}
+    asyncio.run(ex.open_from_signal(sig))
+    assert not ex.positions  # back under the roof
+    feed.set(100.2)
+    asyncio.run(ex.open_from_signal(sig))
+    assert len(ex.positions) == 1
+
+
+def test_break_even_exit_when_every_horizon_turns_bearish():
+    feed, ctl, ex = make(price=100.0)
+    p = open_long(ex)
+
+    class Pred:
+        cache = {}
+
+        def decision_cache(self, sym):
+            return self.cache.get((sym, "15m"))
+
+    ex.predictor = Pred()
+    bar_t = time.time() // 900 * 900 - 900
+    paths = np.full((24, 18, 4), 99.0)  # every horizon below the price
+    Pred.cache[("PERP_SOL_USDC", "15m")] = {"ts": p.opened_ts + 1, "last": 100.0, "paths": paths, "bar_t": bar_t}
+    feed.set(p.entry * 0.999)
+    assert ex._check(p, p.entry * 0.999, 0.5) is None  # at a loss: never closed
+    assert p.bearish_all and set(p.p_up_h) == {"15m", "1h", "4h"}
+    be = p.entry * (1 + 2 * settings.taker_fee + 2 * settings.slippage) * 1.0005
+    feed.set(be)
+    r = ex._check(p, be, 0.5)
+    assert r and r.startswith("uscita in pari netto") and p.pnl >= 0
+
+
+def test_break_even_exit_needs_all_three_horizons_bearish():
+    feed, ctl, ex = make(price=100.0)
+    p = open_long(ex)
+
+    class Pred:
+        cache = {}
+
+        def decision_cache(self, sym):
+            return self.cache.get((sym, "15m"))
+
+    ex.predictor = Pred()
+    bar_t = time.time() // 900 * 900 - 900
+    paths = np.full((24, 18, 4), 99.0)
+    paths[:, 15, 3] = 103.0  # 4 h ahead still up
+    Pred.cache[("PERP_SOL_USDC", "15m")] = {"ts": p.opened_ts + 1, "last": 100.0, "paths": paths, "bar_t": bar_t}
+    be = p.entry * 1.002
+    feed.set(be)
+    assert ex._check(p, be, 0.5) is None and not p.bearish_all

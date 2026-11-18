@@ -22,16 +22,16 @@ export type CheckerRow = {
   leverage: number; kronos_p_tp: number; kronos_p_sl: number; kronos_p_liq: number; ev: number; combined_prob: number;
   extra_risk: number; score: number; eligible: boolean; reasons: string[]; source: string; max_leverage: number;
   rsi: number; regime: string; flags: string[]; ind_score: number; analog_win: number | null; analog_n: number;
-  p_up_4h: number; conf_4h: number; range_pos: number; in_zone: boolean;
+  p_up_4h: number; conf_4h: number; range_pos: number;
   horizons: HorizonPick[]; best_h: HorizonPick | null;
-  drops: Record<string, number>; drop_priority: number; drop_window: string | null;
-  dip_price: number; dip_minutes: number; entry_ok: boolean;
+  amplitude: number; roof: number; breakout_price: number; chase_price: number; breakout: boolean;
 };
 export type Position = {
   id: string; symbol: string; base: string; side: "long" | "short"; leverage: number; margin: number; entry: number;
   qty: number; notional: number; tp: number; sl: number; liq: number; mode: string; origin: string; opened_ts: number;
   fees: number; funding: number; last_price: number; status: string; pnl: number; roe: number; lev_move: number; signal: any;
   p_dir_now: number | null; reverse_count: number; locked: boolean; recovery_prob: number | null;
+  p_up_h: Record<string, number>; bearish_all: boolean;
 };
 export type PaperCapital = {
   start: number; equity: number; pnl: number; pnl_pct: number; realized: number; unrealized: number; exposure: number;
@@ -40,7 +40,9 @@ export type PaperCapital = {
 export type ExecutorView = {
   mode: "paper" | "real"; auto: boolean; wallet: string | null; real_ready: boolean; real_auto: boolean; balance: number;
   equity: number; positions: Position[]; pending: any[]; intents: Intent[]; max_positions: number; margin_usdc: number; risk_tiers: [number, number][]; risk_tier_above: number;
-  tp_pct: number; sl_pct: number; use_tp: boolean; exit_margin: number; exit_confirmations: number; entry_zone: number;
+  tp_pct: number; sl_pct: number; use_tp: boolean; exit_margin: number; exit_confirmations: number;
+  min_conf: number; min_move: number; roof_bars: number; breakout_buffer: number; breakout_max_chase: number;
+  be_exit: boolean; be_exit_max_up: number;
   lock_atr_mult: number; lock_profit_pct: number; max_token_exposure: number; max_total_exposure: number;
   use_initial_stop: boolean; recovery_hours: number; recovery_min_prob: number; liq_min_distance: number; equity_now: number; hold_losers: boolean; longs_only: boolean;
   paper: PaperCapital;

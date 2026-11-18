@@ -286,6 +286,7 @@ table.t tr.cur td:first-child { box-shadow: inset 3px 0 0 var(--kronos); }
 .wl .besth b { color: var(--kronos); font-weight: 600; }
 
 .droptag { margin-left: 6px; font-size: 11px; font-weight: 600; color: var(--warn); background: rgba(243, 184, 91, 0.12); border-radius: var(--r-chip); padding: 0 6px; white-space: nowrap; }
+.droptag.long { color: var(--long); background: color-mix(in srgb, var(--long) 14%, transparent); }
 
 .modelsel { gap: 4px; }
 .modelsel button { border: 0; background: none; color: var(--muted); padding: 1px 8px; border-radius: var(--r-chip); cursor: pointer; font-size: 12px; }

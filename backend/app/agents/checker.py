@@ -1,13 +1,13 @@
-"""Checker agent: ranks the universe for long / short entries at 10x-20x.
+"""Checker agent: ranks the universe for breakout longs at 10x-20x.
 
 For every token it combines
-  1. Kronos: probability that TP (+5% leveraged) is hit before SL (-2%) or
-     liquidation, from the sampled 30-minute paths on 1m bars;
-  2. indicators: EMA 9/21/50, RSI, MACD, Bollinger %B, ATR, volume;
-  3. historical analogs: the 25 most similar 30-minute shapes in the
-     history of the same token and of every other token in the universe,
-     replayed forward with the same TP/SL rule;
-and derives an extra risk percentage shown next to the Kronos probability.
+  1. Kronos (15m candles, 4 hours ahead): the predicted SIZE of the move (amplitude, mean of |4h return| over the
+     sampled paths) and its direction (probability of a long, which must not be against it);
+  2. the breakout: the live price above the highest high of the last hour's closed candles (the roof), i.e. the
+     predicted move has started and it is going up;
+  3. indicators (EMA 9/21/50, RSI, MACD, Bollinger %B, ATR, volume) and historical analogs (the 25 most similar
+     4-hour shapes in the history of every token), which with volatility and the Analyst's macro risk give the
+     extra risk shown next to the Kronos probability (it decides the margin tier).
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import time
 import numpy as np
 
 from ..config import HORIZONS, TIMEFRAMES, settings
-from ..predict.probability import horizon_index, predicted_dip
+from ..predict.probability import horizon_index
 from .indicators import indicator_view, pattern_analogs
 
 log = logging.getLogger("checker")
@@ -43,6 +43,7 @@ class Checker:
         self._library15_ts = 0.0
         self.controller = None  # set by main: every new 4h forecast is logged with its outcome (signal register)
         self._logged: dict[str, float] = {}  # symbol -> ts of the last forecast logged
+        self._broke: dict[str, int] = {}  # symbol -> breakout already logged for that forecast (1) / eligible (2)
         self.btc = {"ok": True, "chg_4h": None, "chg_24h": None}
 
     def pause(self, seconds: float, reason: str) -> None:
@@ -98,9 +99,9 @@ class Checker:
         return out
 
     def evaluate(self, sym: str, decision: bool = False, forecast: dict | None = None) -> dict | None:
-        """4-hour plan for one token: direction and probability from Kronos (15m candles, 16 steps),
-        extra risk from indicators, historical analogs, volatility and macro, and the entry zone
-        (position of the price inside the last 4 hours' range)."""
+        """4-hour breakout plan for one token: predicted amplitude and direction from Kronos (15m candles, 4 h
+        ahead), the roof (last hour's high) the price must break, and the extra risk from indicators, historical
+        analogs, volatility and macro."""
         m = self.feed.markets.get(sym)
         if forecast is not None:
             c4 = forecast  # the forecast just computed for this decision (Executor, right before an entry)
@@ -116,7 +117,6 @@ class Checker:
         i4 = horizon_index(c4["bar_t"], 900, step, L, now)  # 4 hours from now, even if the forecast is a few bars old
         if i4 is None:
             return None
-        elapsed = i4 - (step - 1)  # 15m bars closed since the forecast was computed
         closes = c4["paths"][:, i4, 3]
         # Probabilities are measured against the LIVE price, not the price at the time Kronos ran:
         # if the market already moved toward the forecast, the remaining upside is what matters.
@@ -127,9 +127,14 @@ class Checker:
         exp_ret = float((closes / price - 1).mean())
         median_4h = float(np.median(closes))
         drift = price / c4["last"] - 1  # how far the price moved since the forecast was computed
-        # predicted entry point: from the lowest price of each sampled path before the 4h horizon
-        dip_price, dip_step = predicted_dip(c4["paths"][:, elapsed:], step, settings.dip_quantile)  # bars still ahead
-        entry_ok = price <= dip_price * (1 + settings.entry_tolerance)
+        # predicted amplitude: how much the paths move in 4 hours, either way, from the price Kronos started from
+        amplitude = float(np.abs(closes / c4["last"] - 1).mean())
+        # the roof: highest high of the last hour's CLOSED 15m candles (the forming one is the breakout itself)
+        closed15 = bars15[:-1] if bars15[-1, 0] + 900 > now else bars15
+        roof = float(closed15[-settings.roof_bars:, 2].max())
+        trigger = roof * (1 + settings.breakout_buffer)
+        chase = roof * (1 + settings.breakout_max_chase)
+        breakout = trigger < price <= chase
         ind = indicator_view(bars15)
 
         cached = self._analog_cache.get((sym, "4h"))
@@ -141,8 +146,7 @@ class Checker:
         analog_dir = (ana["fwd_up"] if side > 0 else 1 - ana["fwd_up"]) if ana.get("n") else None
 
         hi4, lo4 = float(bars5[:, 2].max()), float(bars5[:, 3].min())
-        range_pos = float((price - lo4) / (hi4 - lo4)) if hi4 > lo4 else 0.5
-        in_zone = range_pos <= settings.entry_zone if side > 0 else range_pos >= 1 - settings.entry_zone
+        range_pos = float((price - lo4) / (hi4 - lo4)) if hi4 > lo4 else 0.5  # shown only, not an entry rule
 
         ind_agree = (1 + side * ind["score"]) / 2
         sl_move10 = settings.stop_loss_pct / 100 / 10
@@ -161,20 +165,18 @@ class Checker:
         lev = self._leverage(extra_risk, m.max_leverage)
 
         reasons = []
-        if conf <= settings.min_confidence:
-            reasons.append(f"probabilità a 4 ore non oltre il {settings.min_confidence * 100:.0f}%")
+        if side > 0 and p_up <= settings.min_confidence:
+            reasons.append(f"Kronos non favorevole al rialzo a 4 ore ({p_up * 100:.0f}%, serve oltre il {settings.min_confidence * 100:.0f}%)")
+        if amplitude < settings.min_move:
+            reasons.append(f"movimento previsto a 4 ore {amplitude * 100:.1f}%, sotto la soglia di {settings.min_move * 100:g}%")
         if extra_risk > settings.max_risk:
             reasons.append(f"rischio aggiuntivo oltre il {settings.max_risk * 100:.0f}%")
         if score < settings.min_signal_score:
             reasons.append("punteggio sotto soglia")
-        zone_bypass = False  # the 4h-range zone is replaced by the predicted entry point
-        if side > 0 and not entry_ok:
-            reasons.append(f"in attesa del punto d'ingresso previsto ({dip_price:.6g}, tra circa {(dip_step + 1) * 15} min)")
-        costs = 2 * (settings.taker_fee + settings.slippage)
-        if side > 0 and median_4h <= price * (1 + costs):
-            reasons.append("prezzo attuale già sopra la mediana prevista a 4 ore")
-        if side < 0 and median_4h >= price * (1 - costs):
-            reasons.append("prezzo attuale già sotto la mediana prevista a 4 ore")
+        if price <= trigger:
+            reasons.append(f"in attesa della rottura del tetto dell'ultima ora ({roof:.6g}, ingresso sopra {trigger:.6g})")
+        elif price > chase:
+            reasons.append(f"prezzo già {(price / roof - 1) * 100:.1f}% sopra il tetto {roof:.6g}: troppo tardi, attendo un nuovo tetto")
         if time.time() - c4["ts"] > settings.max_forecast_age_s:
             reasons.append("previsione a 4 ore troppo vecchia")
         btc = self.btc
@@ -184,16 +186,7 @@ class Checker:
             reasons.insert(0, "previsione al ribasso: l'Executor apre solo long")
         eligible = not reasons
         if forecast is None and not decision:
-            self._log_signal(sym, c4, price, p_up, entry_ok, eligible and not self.paused, reasons, extra_risk)
-
-        # recent sharp drops (> drop_priority_pct over 4/8/12 h): only an ordering priority among eligible tokens
-        closes15 = bars15[:, 4]
-        drops = {}
-        for label, n in (("4h", 16), ("8h", 32), ("12h", 48)):
-            if len(closes15) > n and closes15[-n - 1] > 0:
-                drops[label] = float(price / closes15[-n - 1] - 1)
-        worst = min(drops.items(), key=lambda kv: kv[1]) if drops else None
-        drop_priority = -worst[1] if worst and worst[1] <= -settings.drop_priority_pct / 100 else 0.0
+            self._log_signal(sym, c4, price, p_up, amplitude, breakout, eligible and not self.paused, reasons, extra_risk)
 
         # same risk model on every dashboard horizon: which one has the best probability with the lowest risk
         per_h = []
@@ -229,8 +222,8 @@ class Checker:
             "side": "long" if side > 0 else "short", "leverage": lev,
             "p_up_4h": p_up, "conf_4h": conf, "exp_ret_4h": exp_ret, "median_4h": median_4h,
             "forecast_price": c4["last"], "drift": drift,
-            "range_pos": range_pos, "range_hi": hi4, "range_lo": lo4, "in_zone": in_zone, "zone_bypass": zone_bypass,
-            "dip_price": dip_price, "dip_minutes": (dip_step + 1) * 15, "entry_ok": entry_ok,
+            "range_pos": range_pos, "range_hi": hi4, "range_lo": lo4,
+            "amplitude": amplitude, "roof": roof, "breakout_price": trigger, "chase_price": chase, "breakout": breakout,
             "kronos_p_tp": conf,  # probability used by the Controller buckets
             "kronos_p_sl": 1 - conf, "kronos_p_liq": best["p_liq"] if best else 0.0,
             "ev": exp_ret * side * lev,
@@ -240,24 +233,30 @@ class Checker:
             "eligible": eligible and not self.paused, "reasons": reasons,
             "source": c4["source"], "age": time.time() - c4["ts"], "options": c1["trade"]["options"][:4] if best else [],
             "horizons": per_h, "best_h": best_h,
-            "drops": drops, "drop_priority": drop_priority, "drop_window": worst[0] if drop_priority else None,
             "model": c4.get("model", ""), "samples": int(c4["paths"].shape[0]), "forecast_ts": c4["ts"],
             "btc_chg_4h": btc["chg_4h"], "btc_chg_24h": btc["chg_24h"],
         }
 
-    def _log_signal(self, sym, c4, price, p_up, entry_ok, eligible, reasons, extra_risk) -> None:
-        """Signal register: the first evaluation of every new 4h forecast, executed or not, with what the Checker
-        decided; the Controller fills in the real 4h return when it is due."""
-        if self.controller is None or self._logged.get(sym) == c4["ts"]:
+    def _log_signal(self, sym, c4, price, p_up, amplitude, breakout, eligible, reasons, extra_risk) -> None:
+        """Signal register: one row per new 4h forecast, executed or not (price, probability and predicted amplitude
+        at its first evaluation), then the first breakout of the roof seen while that forecast is in use, and whether
+        it was eligible. The Controller fills in the real 4h returns, from the forecast and from the breakout."""
+        if self.controller is None:
             return
-        self._logged[sym] = c4["ts"]
         try:
-            self.controller.record_signal({
-                "ts": c4["ts"], "due": c4["bar_t"] + (HORIZONS["4h"][2] + 1) * 900, "symbol": sym, "price": price,
-                "p_up_4h": p_up, "entry_ok": entry_ok, "eligible": eligible,
-                "extra_risk": extra_risk, "reasons": reasons, "model": c4.get("model", ""),
-                "samples": int(c4["paths"].shape[0]),
-            })
+            if self._logged.get(sym) != c4["ts"]:
+                self._logged[sym] = c4["ts"]
+                self._broke.pop(sym, None)
+                self.controller.record_signal({
+                    "ts": c4["ts"], "due": c4["bar_t"] + (HORIZONS["4h"][2] + 1) * 900, "symbol": sym, "price": price,
+                    "p_up_4h": p_up, "amplitude": amplitude, "breakout": False, "eligible": False,
+                    "extra_risk": extra_risk, "reasons": reasons, "model": c4.get("model", ""),
+                    "samples": int(c4["paths"].shape[0]),
+                })
+            state = self._broke.get(sym, 0)  # 0 none yet, 1 breakout logged, 2 eligible breakout logged
+            if breakout and (state == 0 or (eligible and state == 1)):
+                self._broke[sym] = 2 if eligible else 1
+                self.controller.record_breakout(sym, c4["ts"], price, time.time() + HORIZONS["4h"][0], eligible)
         except Exception:
             log.exception("signal register failed")
 
@@ -273,7 +272,7 @@ class Checker:
                     r = await asyncio.to_thread(self.evaluate, sym)
                     if r:
                         rows.append(r)
-                rows.sort(key=lambda r: r["score"], reverse=True)
+                rows.sort(key=lambda r: (r["amplitude"], r["score"]), reverse=True)  # same order as the openings
                 self.ranking = rows
                 self.bus.publish("ranking", {"rows": [self.slim(r) for r in rows[:40]], "paused": self.paused,
                                              "pause_reason": self.pause_reason if self.paused else ""})
@@ -287,15 +286,14 @@ class Checker:
         return {k: r[k] for k in ("symbol", "base", "name", "rank", "price", "change_24h", "side", "leverage",
                                   "kronos_p_tp", "kronos_p_sl", "kronos_p_liq", "ev", "combined_prob",
                                   "extra_risk", "score", "eligible", "reasons", "source", "max_leverage",
-                                  "p_up_4h", "conf_4h", "range_pos", "in_zone", "horizons", "best_h",
-                                  "drops", "drop_priority", "drop_window", "dip_price", "dip_minutes",
-                                  "entry_ok")} | {
+                                  "p_up_4h", "conf_4h", "range_pos", "horizons", "best_h",
+                                  "amplitude", "roof", "breakout_price", "chase_price", "breakout")} | {
             "rsi": ind["rsi"], "regime": ind["regime"], "flags": ind["flags"], "ind_score": ind["score"],
             "analog_win": r["analog_dir"], "analog_n": r["analogs"].get("n", 0),
         }
 
     def signals(self) -> list[dict]:
-        """Eligible tokens in opening order: those after a sharp recent drop first (largest drop first),
-        then by score. The drop never makes a token eligible, it only moves it up the queue."""
+        """Eligible tokens (breaking their roof now) in opening order: largest predicted 4h move first (user rule),
+        then by score."""
         sig = [r for r in self.ranking if r["eligible"]]
-        return sorted(sig, key=lambda r: (r.get("drop_priority", 0) > 0, r.get("drop_priority", 0), r["score"]), reverse=True)
+        return sorted(sig, key=lambda r: (r.get("amplitude", 0.0), r["score"]), reverse=True)

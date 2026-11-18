@@ -48,7 +48,7 @@ class Settings:
     base_tokens_min: int = _i("PP_BASE_TOKENS_MIN", 6)
     scan_age_s: float = _f("PP_SCAN_AGE", 300.0)  # a token is re-forecast once its forecast is this old
     n_samples: int = _i("PP_SAMPLES", 24)  # sampled futures per prediction
-    # the forecast re-run right before an entry: more samples, so the 70% is measured to about +/-5 points
+    # the forecast re-run right before an entry: more samples, so its probabilities are measured to about +/-5 points
     # instead of +/-9 (24 samples); it costs ~4x one scan forecast, once per entry
     decision_samples: int = _i("PP_DECISION_SAMPLES", 96)
     position_refresh_s: float = _f("PP_POSITION_REFRESH", 300.0)  # 4h forecast of open positions, for the exits
@@ -84,15 +84,22 @@ class Settings:
     # --- checker / analyst ------------------------------------------------------
     # 4-hour strategy (Checker selection + Executor entry/exit)
     min_signal_score: float = _f("PP_MIN_SCORE", 0.0)  # probability x (1 - risk); 0 = off (user: ignore risk for entries)
-    min_confidence: float = _f("PP_MIN_CONF", 0.70)  # Kronos 4h probability must be ABOVE this (user rule: > 70%)
+    # user rule (breakout entry): Kronos must not be against the long, its 4h probability ABOVE this (50%); the
+    # direction comes from the breakout itself, Kronos is asked for the size of the move
+    min_confidence: float = _f("PP_MIN_CONF", 0.50)
     max_risk: float = _f("PP_MAX_RISK", 0.40)  # user rule: no opening above 40% extra risk
     max_forecast_age_s: float = _f("PP_MAX_FORECAST_AGE", 2700.0)  # screening age limit; the entry itself re-predicts
     longs_only: bool = os.getenv("PP_LONGS_ONLY", "1") == "1"  # user rule: the Executor opens long positions only
-    drop_priority_pct: float = _f("PP_DROP_PRIORITY", 5.0)  # >5% drop in 4/8/12 h moves a token up the opening queue
-    entry_zone: float = _f("PP_ENTRY_ZONE", 0.20)
-    zone_bypass_risk: float = _f("PP_ZONE_BYPASS_RISK", 0.35)  # (superseded by the predicted entry point)
-    entry_tolerance: float = _f("PP_ENTRY_TOL", 0.002)  # enter within 0.2% of the predicted entry point
-    dip_quantile: float = _f("PP_DIP_QUANTILE", 0.5)  # entry point = this quantile of the lowest price of each path
+    # breakout entry (user rule): Kronos predicts a large move over the next 4 h, the long opens only once the price
+    # breaks the last hour's high ("the roof"), i.e. once the predicted move has started upwards; nothing if it falls.
+    #   amplitude = mean over the sampled paths of |close 4 h ahead / price when Kronos ran - 1|
+    #   roof      = highest high of the last `roof_bars` CLOSED 15m candles (4 = the last hour)
+    #   entry     = live price above roof x (1 + buffer) and not more than roof x (1 + max_chase) (later = too late,
+    #               wait for a new roof)
+    min_move: float = _f("PP_MIN_MOVE", 0.015)
+    roof_bars: int = _i("PP_ROOF_BARS", 4)
+    breakout_buffer: float = _f("PP_BREAKOUT_BUFFER", 0.001)
+    breakout_max_chase: float = _f("PP_BREAKOUT_MAX_CHASE", 0.005)
     # market filter: no long while BTC is falling over 4 h or 24 h (the altcoins follow it); a long is allowed only
     # if BTC's change is above -threshold (0 = any fall blocks)
     btc_filter_4h: float = _f("PP_BTC_FILTER_4H", 0.0)
@@ -110,6 +117,11 @@ class Settings:
     # funding paid), armed once the price is one 15m ATR above that level
     lock_profit_pct: float = _f("PP_LOCK_PROFIT", 2.0)
     lock_atr_mult: float = _f("PP_LOCK_ATR", 1.0)
+    # break-even exit (user request): an open position is closed as soon as it is at least at NET break-even (fees,
+    # slippage and funding paid) while the latest forecast is bearish on all three horizons (15 min, 1 h and 4 h:
+    # long probability below `be_exit_max_up`). Never a close at a loss.
+    be_exit: bool = os.getenv("PP_BE_EXIT", "1") == "1"
+    be_exit_max_up: float = _f("PP_BE_EXIT_MAX_UP", 0.5)
     analyst_close_threshold: float = _f("PP_ANALYST_CLOSE", 70.0)
     analyst_pause_threshold: float = _f("PP_ANALYST_PAUSE", 55.0)
     news_poll_s: int = _i("PP_NEWS_POLL_S", 120)

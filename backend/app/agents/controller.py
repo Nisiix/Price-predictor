@@ -27,12 +27,15 @@ CREATE TABLE IF NOT EXISTS signals (
     extra_risk REAL, reasons TEXT, model TEXT, samples INTEGER, ret REAL, PRIMARY KEY (symbol, ts)
 );
 """
-# 4h buckets of the Kronos long probability: the Executor's threshold is 70%, so the useful detail is above it
+# 4h buckets of the Kronos long probability (the breakout entry needs it above 50%)
 PROB_EDGES = [0.5, 0.6, 0.7, 0.75, 0.8]
 PROB_LABELS = ["<50%", "50-60%", "60-70%", "70-75%", "75-80%", ">80%"]
 # the user's risk tiers (margin 10/7/5/3% of capital)
 RISK_EDGES = [0.25, 0.30, 0.35, 0.40]
 RISK_LABELS = ["fino al 25%", "25-30%", "30-35%", "35-40%", "oltre 40%"]
+# predicted 4h amplitude (mean |4h return| of the paths); the breakout entry needs at least settings.min_move (1.5%)
+AMP_EDGES = [0.005, 0.01, 0.015, 0.02, 0.03]
+AMP_LABELS = ["<0.5%", "0.5-1%", "1-1.5%", "1.5-2%", "2-3%", ">3%"]
 COSTS = 2 * (settings.taker_fee + settings.slippage)  # round trip, on the price
 
 
@@ -50,10 +53,14 @@ class Controller:
         self.bus = bus
         self.db = sqlite3.connect(settings.db_path, check_same_thread=False)
         self.db.executescript(SCHEMA)
-        try:  # databases made before the coverage column
-            self.db.execute("ALTER TABLE calibration ADD COLUMN covered INTEGER")
-        except sqlite3.OperationalError:
-            pass
+        # databases made before these columns. signals.entry_ok now means "the roof was broken while this forecast
+        # was in use" (it was "price at the predicted entry point" before the breakout entry)
+        for table, col in (("calibration", "covered INTEGER"), ("signals", "amplitude REAL"), ("signals", "bo_price REAL"),
+                           ("signals", "bo_due REAL"), ("signals", "bo_ret REAL")):
+            try:
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
+            except sqlite3.OperationalError:
+                pass
         self.db.commit()
         self.predictor = None  # set by main (for calibration)
         self.executor = None  # set by main (open positions in the report)
@@ -81,10 +88,21 @@ class Controller:
     def record_signal(self, row: dict) -> None:
         """One row per new 4h forecast of a token (first Checker evaluation), executed or not."""
         self.db.execute(
-            "INSERT OR IGNORE INTO signals VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL)",
-            (row["ts"], row["due"], row["symbol"], row["price"], row["p_up_4h"], int(row["entry_ok"]),
+            "INSERT OR IGNORE INTO signals (ts, due, symbol, price, p_up_4h, entry_ok, eligible, extra_risk, reasons,"
+            " model, samples, amplitude) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (row["ts"], row["due"], row["symbol"], row["price"], row["p_up_4h"], int(row.get("breakout", False)),
              int(row["eligible"]), row.get("extra_risk"), json.dumps(row.get("reasons") or []), row.get("model", ""),
-             row.get("samples", 0)),
+             row.get("samples", 0), row.get("amplitude")),
+        )
+        self.db.commit()
+
+    def record_breakout(self, symbol: str, ts: float, price: float, due: float, eligible: bool) -> None:
+        """The price broke the roof while the forecast `ts` was in use: the price then (the entry a long would get)
+        and when its 4h result is due. A later eligible breakout of the same forecast replaces a non-eligible one."""
+        self.db.execute(
+            "UPDATE signals SET entry_ok = 1, eligible = MAX(eligible, ?), bo_price = ?, bo_due = ? "
+            "WHERE symbol = ? AND ts = ? AND (bo_price IS NULL OR (? = 1 AND eligible = 0))",
+            (int(eligible), price, due, symbol, ts, int(eligible)),
         )
         self.db.commit()
 
@@ -98,26 +116,42 @@ class Controller:
             if p1 and p0:
                 self.db.execute("UPDATE signals SET ret = ? WHERE symbol = ? AND ts = ?", (p1 / p0 - 1, sym, ts))
                 done += 1
+        due = self.db.execute("SELECT symbol, ts, bo_price FROM signals WHERE bo_price IS NOT NULL AND bo_ret IS NULL "
+                              "AND bo_due <= ?", (now,)).fetchall()
+        for sym, ts, p0 in due:
+            p1 = price_of(sym)
+            if p1 and p0:
+                self.db.execute("UPDATE signals SET bo_ret = ? WHERE symbol = ? AND ts = ?", (p1 / p0 - 1, sym, ts))
+                done += 1
         if done:
             self.db.commit()
         return done
 
     def signal_stats(self) -> dict:
-        """How the 4h forecasts did, by long-probability bucket: all signals, then only those the Checker passed.
-        `win` = the 4h return beat the round-trip costs (what a long needs to be in profit)."""
-        rows = self.db.execute("SELECT p_up_4h, entry_ok, eligible, ret FROM signals WHERE ret IS NOT NULL").fetchall()
+        """How the 4h forecasts did.
+        `amplitude`: by predicted amplitude, the real size of the 4h move (|return|): the breakout entry relies on
+        Kronos telling a large move from a small one. `all`: by long probability, from the forecast's price.
+        `breakout` / `eligible`: from the price at the roof breakout (what a long would have got), all breakouts and
+        those that passed every rule. `win` = the 4h return beat the round-trip costs."""
+        rows = self.db.execute("SELECT p_up_4h, amplitude, ret FROM signals WHERE ret IS NOT NULL").fetchall()
+        bo = self.db.execute("SELECT p_up_4h, eligible, bo_ret FROM signals WHERE bo_ret IS NOT NULL").fetchall()
 
         def agg(sel):
             out = []
             for lab in PROB_LABELS:
-                rs = [r for r in sel if _bucket(r[0], PROB_EDGES, PROB_LABELS) == lab]
+                rs = [r[-1] for r in sel if _bucket(r[0], PROB_EDGES, PROB_LABELS) == lab]
                 if rs:
-                    out.append({"key": lab, "n": len(rs), "up": sum(1 for r in rs if r[3] > 0) / len(rs),
-                                "win": sum(1 for r in rs if r[3] > COSTS) / len(rs),
-                                "avg_ret": sum(r[3] for r in rs) / len(rs)})
+                    out.append({"key": lab, "n": len(rs), "up": sum(1 for r in rs if r > 0) / len(rs),
+                                "win": sum(1 for r in rs if r > COSTS) / len(rs), "avg_ret": sum(rs) / len(rs)})
             return out
 
-        return {"all": agg(rows), "entry_ok": agg([r for r in rows if r[1]]), "eligible": agg([r for r in rows if r[2]]),
+        amp = []
+        for lab in AMP_LABELS:
+            rs = [r for r in rows if r[1] is not None and _bucket(r[1], AMP_EDGES, AMP_LABELS) == lab]
+            if rs:
+                amp.append({"key": lab, "n": len(rs), "pred": sum(r[1] for r in rs) / len(rs),
+                            "real": sum(abs(r[2]) for r in rs) / len(rs), "up": sum(1 for r in rs if r[2] > 0) / len(rs)})
+        return {"amplitude": amp, "all": agg(rows), "breakout": agg(bo), "eligible": agg([r for r in bo if r[1]]),
                 "pending": self.db.execute("SELECT COUNT(*) FROM signals WHERE ret IS NULL").fetchone()[0]}
 
     def open_view(self) -> dict | None:
@@ -249,7 +283,13 @@ class Controller:
             cov = f"{c['coverage'] * 100:.0f}%" if c.get("coverage") is not None else "n/d"
             lines.append(f"| {c['label']} | {c['n']} | {c['hit_rate'] * 100:.1f}% | {c['brier']:.3f} | {cov} |")
         sg = r["signals"]
-        for key, title in (("all", "tutte le previsioni"), ("entry_ok", "con prezzo al punto d'ingresso"), ("eligible", "idonee per l'Executor")):
+        lines += ["", "## Registro segnali: ampiezza prevista contro movimento reale a 4 ore", "",
+                  "| Ampiezza prevista | Previsioni | Media prevista | Movimento reale medio | Rialzo |", "|---|---:|---:|---:|---:|"]
+        for g in sg["amplitude"]:
+            lines.append(f"| {g['key']} | {g['n']} | {g['pred'] * 100:.2f}% | {g['real'] * 100:.2f}% | {g['up'] * 100:.0f}% |")
+        for key, title in (("all", "tutte le previsioni, dal prezzo della previsione"),
+                           ("breakout", "rotture del tetto, dal prezzo di rottura"),
+                           ("eligible", "rotture idonee per l'Executor, dal prezzo di rottura")):
             lines += ["", f"## Registro segnali a 4 ore: {title}", "",
                       "| Probabilità long | Segnali | Rialzo a 4 ore | Oltre i costi | Ritorno medio |", "|---|---:|---:|---:|---:|"]
             for g in sg[key]:
