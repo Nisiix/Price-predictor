@@ -50,6 +50,40 @@ def atr_pct(bars: np.ndarray, n: int = 14) -> float:
     return float(tr[-n:].mean() / c[-1]) if c[-1] else 0.0
 
 
+def vol5_breakout(bars1: np.ndarray, price: float, now: float, window: int = 60, top: float = 0.10,
+                  trigger: float = 0.5, min_bars: int = 300) -> dict:
+    """5-minute volatility breakout (backtest of 18 Nov 2026, "seguire il movimento").
+
+    width  = expected 5-minute range: std of the 1m log returns over the last `window` closed minutes x sqrt(5)
+             x 2.563 (the 10-90% band of a normal), i.e. what Kronos' 5-minute forecast width tracked (corr 0.81);
+    hot    = that width is in the top `top` share of the token's own widths over the 1m history in memory;
+    pushed = the live price is at least `trigger` x width above the lowest close of the last 5 closed minutes,
+             i.e. the move has started upwards by half of what is expected.
+    """
+    out = {"ready": False, "hot": False, "pushed": False, "ok": False,
+           "width": 0.0, "threshold": 0.0, "rank": 0.0, "push": 0.0, "need": 0.0}
+    if bars1 is None or len(bars1) == 0 or price <= 0:
+        return out
+    closed = bars1[:-1] if bars1[-1, 0] + 60 > now else bars1
+    if len(closed) < min_bars + window + 1:
+        return out
+    c = np.maximum(closed[:, 4].astype(float), 1e-12)
+    lr = np.diff(np.log(c))
+    cs = np.concatenate([[0.0], np.cumsum(lr)])
+    cs2 = np.concatenate([[0.0], np.cumsum(lr * lr)])
+    m1 = (cs[window:] - cs[:-window]) / window
+    m2 = (cs2[window:] - cs2[:-window]) / window
+    widths = np.sqrt(np.maximum(m2 - m1 * m1, 0.0)) * np.sqrt(5.0) * 2.563
+    w = float(widths[-1])
+    thr = float(np.quantile(widths, 1.0 - top))
+    push = float(price / c[-5:].min() - 1.0)
+    rank = float((widths < w).mean())  # share of the token's own widths below the current one
+    out.update(ready=True, width=w, threshold=thr, rank=rank, push=push, need=trigger * w,
+               hot=rank >= 1.0 - top and w > 0, pushed=push >= trigger * w)
+    out["ok"] = out["hot"] and out["pushed"]
+    return out
+
+
 def indicator_view(bars: np.ndarray) -> dict:
     """Snapshot of indicators on 1m bars plus a directional vote in [-1, 1]."""
     close = bars[:, 4]

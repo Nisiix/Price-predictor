@@ -4,7 +4,9 @@ For every token it combines
   1. Kronos (15m candles, 4 hours ahead): the predicted SIZE of the move (amplitude, mean of |4h return| over the
      sampled paths) and its direction (probability of a long, which must not be against it);
   2. the breakout: the live price above the highest high of the last hour's closed candles (the roof), i.e. the
-     predicted move has started and it is going up;
+     predicted move has started and it is going up; with PP_VOL5_FILTER (on by default, user choice 18 Nov) the
+     token's 5-minute volatility must also be in its own top 10% and the price must have covered half of the
+     expected 5-minute range over the last 5 minutes (indicators.vol5_breakout);
   3. indicators (EMA 9/21/50, RSI, MACD, Bollinger %B, ATR, volume) and historical analogs (the 25 most similar
      4-hour shapes in the history of every token), which with volatility and the Analyst's macro risk give the
      extra risk shown next to the Kronos probability (it decides the margin tier).
@@ -19,7 +21,7 @@ import numpy as np
 
 from ..config import HORIZONS, TIMEFRAMES, settings
 from ..predict.probability import horizon_index
-from .indicators import indicator_view, pattern_analogs
+from .indicators import indicator_view, pattern_analogs, vol5_breakout
 
 log = logging.getLogger("checker")
 
@@ -186,6 +188,17 @@ class Checker:
         btc = self.btc
         if settings.btc_filter and side > 0 and not btc["ok"]:
             reasons.append(f"BTC in calo (4 ore {btc['chg_4h'] * 100:+.1f}%, 24 ore {btc['chg_24h'] * 100:+.1f}%)")
+        v5 = vol5_breakout(self.feed.store.get(sym, "1m"), price, now, settings.vol5_window, settings.vol5_top,
+                           settings.vol5_trigger)
+        if settings.vol5_filter:
+            if not v5["ready"]:
+                reasons.append("storico a 1 minuto insufficiente per misurare la volatilità a 5 minuti")
+            elif not v5["hot"]:
+                reasons.append(f"volatilità a 5 minuti al {v5['rank'] * 100:.0f}° percentile, serve il "
+                               f"{settings.vol5_top * 100:.0f}% più alto")
+            elif not v5["pushed"]:
+                reasons.append(f"spinta degli ultimi 5 minuti {v5['push'] * 100:+.2f}%, serve almeno "
+                               f"{v5['need'] * 100:.2f}% (metà del movimento atteso)")
         if settings.longs_only and side < 0:
             reasons.insert(0, "previsione al ribasso: l'Executor apre solo long")
         eligible = not reasons
@@ -228,6 +241,7 @@ class Checker:
             "forecast_price": c4["last"], "drift": drift,
             "range_pos": range_pos, "range_hi": hi4, "range_lo": lo4,
             "amplitude": amplitude, "roof": roof, "breakout_price": trigger, "chase_price": chase, "breakout": breakout,
+            "vol5_rank": v5["rank"], "vol5_push": v5["push"], "vol5_need": v5["need"], "vol5_ok": v5["ok"],
             "kronos_p_tp": conf,  # probability used by the Controller buckets
             "kronos_p_sl": 1 - conf, "kronos_p_liq": best["p_liq"] if best else 0.0,
             "ev": exp_ret * side * lev,
@@ -291,7 +305,8 @@ class Checker:
                                   "kronos_p_tp", "kronos_p_sl", "kronos_p_liq", "ev", "combined_prob",
                                   "extra_risk", "score", "eligible", "reasons", "source", "max_leverage",
                                   "p_up_4h", "conf_4h", "range_pos", "horizons", "best_h",
-                                  "amplitude", "roof", "breakout_price", "chase_price", "breakout")} | {
+                                  "amplitude", "roof", "breakout_price", "chase_price", "breakout",
+                                  "vol5_rank", "vol5_push", "vol5_need", "vol5_ok")} | {
             "rsi": ind["rsi"], "regime": ind["regime"], "flags": ind["flags"], "ind_score": ind["score"],
             "analog_win": r["analog_dir"], "analog_n": r["analogs"].get("n", 0),
         }

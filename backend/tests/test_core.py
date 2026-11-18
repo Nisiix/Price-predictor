@@ -5,10 +5,16 @@ import numpy as np
 import pytest
 
 from app.agents.executor import Executor
-from app.agents.indicators import indicator_view, pattern_analogs, rsi
+from app.agents.indicators import indicator_view, pattern_analogs, rsi, vol5_breakout
 from app.config import settings
 from app.market.feed import Market
 from app.predict.probability import first_touch, trade_levels
+
+
+@pytest.fixture(autouse=True)
+def _no_vol5_filter(monkeypatch):
+    """The 5-minute volatility condition needs hours of 1m candles: off unless a test asks for it."""
+    monkeypatch.setattr(settings, "vol5_filter", False)
 
 
 def path(closes, spread=0.0):
@@ -512,7 +518,7 @@ def test_signal_register_and_stats(tmp_path, monkeypatch):
 
 
 # ------------------------------------------------------------------ breakout entry
-def _breakout_checker(price, highs, p_up=0.75, move=0.03, age_bars=0):
+def _breakout_checker(price, highs, p_up=0.75, move=0.03, age_bars=0, ones=None):
     """A Checker on synthetic 15m candles whose last closed hour peaks at max(highs), with a fresh Kronos forecast."""
     from app.agents.checker import Checker
     from app.config import TIMEFRAMES
@@ -531,6 +537,9 @@ def _breakout_checker(price, highs, p_up=0.75, move=0.03, age_bars=0):
         rows.append([t, 99.0, h, 98.5, 99.0, 10.0])
     Feed.store.set_history("PERP_SOL_USDC", "15m", rows)
     Feed.store.set_history("PERP_SOL_USDC", "5m", [[cur - 300 * (48 - i), 99.0, 99.5, 98.5, 99.0, 1.0] for i in range(48)])
+    if ones is not None:  # closes of the 1m candles, the last one closed a minute ago
+        cur1 = int(now // 60 * 60)
+        Feed.store.set_history("PERP_SOL_USDC", "1m", [[cur1 - 60 * (len(ones) - i), c, c, c, c, 1.0] for i, c in enumerate(ones)])
     Feed.store.update_tick("PERP_SOL_USDC", price, now)
 
     class Pred:
@@ -653,3 +662,42 @@ def test_risk_btc_and_analyst_never_block_by_default():
     ch.pause(600, "test")
     r = ch.evaluate("PERP_SOL_USDC")
     assert r["eligible"] and not ch.paused, r["reasons"]  # only the Kronos forecast and the breakout decide
+
+
+# ------------------------------------------------------------------ 5-minute volatility condition (option C)
+def _ones(calm=580, hot=60, hot_amp=0.001):
+    """1m closes: a calm stretch, then `hot` minutes alternating +-hot_amp around 99.5."""
+    calm_c = [99.0 * (1 + (1e-4 if i % 2 else -1e-4)) for i in range(calm)]
+    hot_c = [99.5 * (1 + (hot_amp if i % 2 else -hot_amp)) for i in range(hot)]
+    return calm_c + hot_c
+
+
+def test_vol5_breakout_measures_width_rank_and_push():
+    now = time.time()
+    cur1 = int(now // 60 * 60)
+    closes = _ones()
+    bars = np.array([[cur1 - 60 * (len(closes) - i), c, c, c, c, 1.0] for i, c in enumerate(closes)])
+    flat = vol5_breakout(bars, 99.5, now)
+    assert flat["ready"] and flat["hot"] and flat["rank"] > 0.9
+    assert flat["width"] == pytest.approx(0.002 * np.sqrt(5) * 2.563, rel=0.05)  # +-0.1% closes: 0.2% 1m returns
+    assert not flat["pushed"] and not flat["ok"]
+    up = vol5_breakout(bars, 100.2, now)  # 0.8% above the lowest close of the last 5 minutes, half range ~0.57%
+    assert up["pushed"] and up["ok"]
+    calm = vol5_breakout(bars[:-60], 99.2, now)  # the calm stretch only
+    assert not calm["hot"] or not calm["pushed"]
+    assert not vol5_breakout(bars[-100:], 100.2, now)["ready"]  # too little history
+
+
+def test_breakout_needs_the_5_minute_volatility_when_the_filter_is_on(monkeypatch):
+    monkeypatch.setattr(settings, "vol5_filter", True)
+    highs = [99.6, 100.0, 99.8, 99.7]
+    r = _breakout_checker(100.2, highs, ones=_ones()).evaluate("PERP_SOL_USDC")
+    assert r["breakout"] and r["vol5_ok"] and r["eligible"], r["reasons"]
+    calm = [99.0 * (1 + (1e-4 if i % 2 else -1e-4)) for i in range(640)]
+    r = _breakout_checker(100.2, highs, ones=calm).evaluate("PERP_SOL_USDC")  # breakout, but no volatility spike
+    assert r["breakout"] and not r["eligible"], r["reasons"]
+    assert any("volatilità a 5 minuti" in x for x in r["reasons"]), r["reasons"]
+    r = _breakout_checker(100.2, highs, ones=_ones(hot_amp=0.004)).evaluate("PERP_SOL_USDC")  # wide range, small push
+    assert not r["eligible"] and any("spinta" in x for x in r["reasons"]), r["reasons"]
+    r = _breakout_checker(100.2, highs).evaluate("PERP_SOL_USDC")  # no 1m history yet
+    assert not r["eligible"] and any("storico a 1 minuto" in x for x in r["reasons"])

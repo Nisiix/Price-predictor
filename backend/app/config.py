@@ -109,6 +109,13 @@ class Settings:
     roof_bars: int = _i("PP_ROOF_BARS", 4)
     breakout_buffer: float = _f("PP_BREAKOUT_BUFFER", 0.001)
     breakout_max_chase: float = _f("PP_BREAKOUT_MAX_CHASE", 0.01)  # user: 1% (0.5% was often passed during the confirmation)
+    # user choice (18 Nov, option C of the 5-minute backtest): the 4h breakout long also needs the token's 5-minute
+    # volatility in its own top `vol5_top` share AND a push of at least `vol5_trigger` x the expected 5-minute range
+    # over the last 5 minutes (agents/indicators.vol5_breakout). PP_VOL5_FILTER=0 turns it off.
+    vol5_filter: bool = os.getenv("PP_VOL5_FILTER", "1") == "1"
+    vol5_top: float = _f("PP_VOL5_TOP", 0.10)
+    vol5_trigger: float = _f("PP_VOL5_TRIGGER", 0.5)
+    vol5_window: int = _i("PP_VOL5_WINDOW", 60)  # minutes of 1m returns behind the expected range
     # market filter on BTC: removed by the user (18 Nov). PP_BTC_FILTER=1 restores it: no long while BTC is falling
     # over 4 h or 24 h by more than the thresholds below (0 = any fall blocks)
     btc_filter: bool = os.getenv("PP_BTC_FILTER", "0") == "1"

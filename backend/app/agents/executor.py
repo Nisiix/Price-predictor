@@ -363,7 +363,8 @@ class Executor:
             return
         side = 1 if sig["side"] == "long" else -1
         snapshot = {k: sig.get(k) for k in ("kronos_p_tp", "kronos_p_sl", "combined_prob", "extra_risk", "score", "ev",
-                                            "source", "p_up_4h", "conf_4h", "range_pos", "amplitude", "roof")}
+                                            "source", "p_up_4h", "conf_4h", "range_pos", "amplitude", "roof",
+                                            "vol5_rank", "vol5_push")}
         snapshot["regime"] = sig["indicators"]["regime"]
         snapshot["rsi"] = sig["indicators"]["rsi"]
         snapshot["analog_win"] = sig.get("analog_dir")

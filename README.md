@@ -75,6 +75,7 @@ Tutto è modificabile con variabili d'ambiente (vedi `backend/app/config.py`):
 | `PP_MIN_CONF` | 0.50 | probabilità di rialzo a 4 ore che Kronos deve superare (non contrario al long), sulla previsione di scansione e su quella di conferma |
 | `PP_MIN_MOVE` | 0.015 | ampiezza prevista minima: media del movimento a 4 ore dei percorsi, in valore assoluto, dal prezzo della previsione |
 | `PP_ROOF_BARS` / `PP_BREAKOUT_BUFFER` / `PP_BREAKOUT_MAX_CHASE` | 4 / 0.001 / 0.01 | tetto = massimo delle ultime 4 candele da 15 minuti chiuse; ingresso sopra il tetto + 0,1%, non oltre il tetto + 1% |
+| `PP_VOL5_FILTER` / `PP_VOL5_TOP` / `PP_VOL5_TRIGGER` / `PP_VOL5_WINDOW` | 1 / 0.10 / 0.5 / 60 | condizione in più per l'ingresso (scelta del 18 novembre): la volatilità a 5 minuti del token (deviazione dei rendimenti a 1 minuto degli ultimi 60 minuti) deve essere nel suo 10% più alto, e negli ultimi 5 minuti il prezzo deve aver percorso almeno metà del movimento atteso a 5 minuti (0 la disattiva) |
 | `PP_BE_EXIT` / `PP_BE_EXIT_MAX_UP` | 1 / 0.5 | uscita in pari netto quando la previsione dà il rialzo sotto il 50% a 15 minuti, 1 ora e 4 ore (0 la disattiva) |
 | `PP_BTC_FILTER` | 0 | filtro BTC tolto; 1 = niente long se BTC è sceso a 4 o 24 ore oltre `PP_BTC_FILTER_4H` / `PP_BTC_FILTER_24H` (0 / 0) |
 | `PP_ANALYST_BLOCKS` | 0 | la pausa dell'Analyst non blocca le aperture (il suo rischio macro abbassa solo la fascia di margine); 1 la ripristina |
