@@ -10,7 +10,8 @@ import { useRealTrading } from "./wallet/useRealTrading";
 const TF_SECONDS: Record<string, number> = { "5s": 5, "1m": 60, "5m": 300, "15m": 900 };
 // horizon -> [candle timeframe, steps on that timeframe] (mirrors backend/app/config.py HORIZONS)
 const HORIZON_TF: Record<string, ["5s" | "1m" | "5m" | "15m", number]> = {
-  "5s": ["5s", 1], "10s": ["5s", 2], "30s": ["5s", 6], "1m": ["1m", 1], "15m": ["1m", 15], "30m": ["5m", 6], "1h": ["5m", 12], "4h": ["15m", 16],
+  // every horizon is read from the same 15m forecast (one Kronos run per token)
+  "15m": ["15m", 1], "1h": ["15m", 4], "4h": ["15m", 16],
 };
 const TF_NAME: Record<string, string> = { "5s": "candele da 5 secondi", "1m": "candele da 1 minuto", "5m": "candele da 5 minuti", "15m": "candele da 15 minuti" };
 

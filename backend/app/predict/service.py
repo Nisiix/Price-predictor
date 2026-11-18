@@ -24,7 +24,7 @@ MODELS = {
     "base": ("NeoQuasar/Kronos-base", "NeoQuasar/Kronos-Tokenizer-base", 512, 6.0),  # ~20x slower on CPU
 }
 # user rule: how many tokens (by market cap) each model analyses; None = the whole universe
-MODEL_UNIVERSE = {"mini": 12, "base": None}
+MODEL_UNIVERSE = {"mini": 12, "base": settings.base_tokens}
 MODEL_FILE = DATA_DIR / "model.json"
 
 
@@ -75,10 +75,11 @@ class PredictionService:
     def _run_tf(self, sym: str, tf: str, engine: KronosEngine | None = None) -> dict | None:
         engine = engine or self.engine
         sec = TIMEFRAMES[tf]
-        bars = self.feed.store.get(sym, tf, settings.lookback + 1)
+        lookback = settings.base_lookback if engine.model_name.endswith("Kronos-base") else settings.lookback
+        bars = self.feed.store.get(sym, tf, lookback + 1)
         if len(bars) and bars[-1, 0] + sec > time.time():
             bars = bars[:-1]  # the last candle is still forming: Kronos sees only closed candles
-        bars = bars[-settings.lookback:]
+        bars = bars[-lookback:]
         if len(bars) < MIN_BARS[tf]:
             return None
         pred_len = PRED_LEN[tf]
@@ -104,10 +105,11 @@ class PredictionService:
             paths = paths * (last / anchor)
         m = self.feed.markets.get(sym)
         trade = None
-        if tf in ("1m",) and m:
+        if tf == "15m" and m:
+            # TP / SL / liquidation over the 4 hours ahead, for reference on the dashboard
             fee_rt = 2 * (settings.taker_fee + settings.slippage)
             trade = best_trade(
-                paths, last, settings.leverage_choices, settings.take_profit_pct, settings.stop_loss_pct,
+                paths[:, :HORIZONS["4h"][2]], last, settings.leverage_choices, settings.take_profit_pct, settings.stop_loss_pct,
                 m.mmr, fee_rt, m.max_leverage,
             )
         self.inferences += 1
@@ -172,8 +174,9 @@ class PredictionService:
             c = self.cache.get((sym, tf))
             return c is None or now - c["ts"] > age
 
+        tfs = sorted({tf for _, tf, _ in HORIZONS.values()})  # one forecast per token: 15m
         for sym in list(self.focus):
-            for tf in ("1m", "5m", "15m"):  # sub-minute horizons are no longer shown on the dashboard
+            for tf in tfs:
                 if stale(sym, tf, MAX_AGE[tf] * min(self.factor, 2.0)) and self.feed.store.count(sym, tf) >= MIN_BARS[tf]:
                     return sym, tf
         for sym in list(self.priority):
@@ -181,13 +184,9 @@ class PredictionService:
             key = "15m:base" if self.decider is not None and self.decider.ready else "15m"
             if stale(sym, key, 180.0) and self.feed.store.count(sym, "15m") >= MIN_BARS["15m"]:
                 return sym, key
-        # alternate the Checker scan (1m) with the scan of the dashboard's horizon timeframe
-        board_tfs = sorted({HORIZONS[h][1] for h in self.board_horizons if h in HORIZONS} or {"1m"})
-        self._turn += 1
-        board_jobs = [("board", board_tfs[(self._turn // 2) % len(board_tfs)])]
-        order = board_jobs + [("checker", "1m")] if self._turn % 2 else [("checker", "1m")] + board_jobs
-        for kind, tf in order:
-            job = self._scan(tf, (BOARD_AGE[tf] if kind == "board" else SCAN_AGE) * self.factor, kind, stale)
+        # the same forecast serves the token list, the Checker and the Executor: scan the stalest token
+        for tf in tfs:
+            job = self._scan(tf, settings.scan_age_s, "board", stale)
             if job:
                 return job
         return None
@@ -280,12 +279,12 @@ class PredictionService:
 
     def snapshot(self, sym: str) -> dict:
         res = {"symbol": sym, "horizons": self.horizons(sym), "fans": {}, "trade": None}
-        for tf in ("5s", "1m", "5m", "15m"):
+        for tf in sorted({tf for _, tf, _ in HORIZONS.values()}):
             c = self.cache.get((sym, tf))
             if c:
                 res["fans"][tf] = {"t": c["future_t"], **c["fan"], "anchor": c["last"], "bar_t": c["bar_t"],
                                    "source": c["source"], "age": time.time() - c["ts"]}
-                if tf == "1m":
+                if tf == "15m":
                     res["trade"] = c["trade"]
         return res
 
@@ -296,7 +295,8 @@ class PredictionService:
             "decision_model": settings.decision_model, "decision_ready": bool(self.decider and self.decider.ready),
             "decision_error": self.decider.error if self.decider else None,
             "device": self.engine.device, "latency": self.engine.last_latency_s, "busy": self.busy_with,
-            "inferences": self.inferences, "samples": settings.n_samples, "lookback": settings.lookback,
+            "inferences": self.inferences, "samples": settings.n_samples,
+            "lookback": settings.base_lookback if self.model_key == "base" else settings.lookback,
             "scanned": len({s for (s, tf) in self.cache if tf == "15m"} & set(self.active_symbols())),
             "active": len(self.active_symbols()),
         }

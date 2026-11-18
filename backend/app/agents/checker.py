@@ -176,7 +176,7 @@ class Checker:
 
         # same risk model on every dashboard horizon: which one has the best probability with the lowest risk
         per_h = []
-        for h in ("15m", "30m", "1h", "4h"):
+        for h in HORIZONS:  # 15m, 1h, 4h
             _, tf, st = HORIZONS[h]
             ch = self.predictor.cache.get((sym, tf))
             ih = horizon_index(ch["bar_t"], TIMEFRAMES[tf], st, ch["paths"].shape[1], time.time()) if ch else None
@@ -199,8 +199,8 @@ class Checker:
                           "score": cf * (1 - rk), "age": time.time() - ch["ts"]})
         best_h = max(per_h, key=lambda x: x["score"]) if per_h else None
 
-        # 30-minute TP/SL analysis on 1m candles, kept for reference
-        c1 = self.predictor.cache.get((sym, "1m"))
+        # TP/SL analysis over the next 4 hours (same 15m forecast), kept for reference
+        c1 = c4
         best = c1["trade"]["best"] if c1 and c1.get("trade") and c1["trade"]["best"] else None
         return {
             "symbol": sym, "base": m.base, "name": m.name, "rank": m.rank, "price": price,

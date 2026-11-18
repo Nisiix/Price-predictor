@@ -40,8 +40,8 @@ _client_horizon: dict[int, str] = {}  # each open dashboard sorts by its own hor
 
 
 def _sync_horizons() -> None:
-    # 4h: the Executor trades on it; 1h: keeps 5m forecasts fresh so every token has all horizons for "best horizon"
-    predictor.board_horizons = set(_client_horizon.values()) | {"4h", "1h"}
+    # every horizon comes from the same 15m forecast
+    predictor.board_horizons = {h for h in _client_horizon.values() if h in HORIZONS} | {"4h", "1h"}
 STARTED = time.time()
 
 

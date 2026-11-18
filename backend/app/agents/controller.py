@@ -98,7 +98,7 @@ class Controller:
             "SELECT label, COUNT(*), AVG(CASE WHEN (p_up > 0.5) = (ret > 0) THEN 1.0 ELSE 0.0 END),"
             " AVG((p_up - (ret > 0)) * (p_up - (ret > 0))) FROM calibration WHERE ret != 0 GROUP BY label"
         )
-        order = ["10s", "30s", "1m", "5m", "15m", "30m", "1h"]
+        order = ["10s", "30s", "1m", "5m", "15m", "30m", "1h", "4h"]
         rows = [{"label": l, "n": n, "hit_rate": h, "brier": b} for l, n, h, b in cur.fetchall()]
         rows.sort(key=lambda r: order.index(r["label"]) if r["label"] in order else 99)
         return rows

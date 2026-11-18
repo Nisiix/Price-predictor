@@ -2,8 +2,8 @@ import { useMemo, useState } from "react";
 import type { Board, CheckerRow, HorizonPick, ExecutorView, HorizonStat, Market, Position, Snapshot } from "../api";
 import { pct, postJSON, price, signed, usd } from "../api";
 
-const HORIZON_ORDER = ["15m", "30m", "1h", "4h"];
-export const HORIZON_CHOICES: [string, string][] = [["15m", "15 minuti"], ["30m", "30 minuti"], ["1h", "1 ora"], ["4h", "4 ore"]];
+const HORIZON_ORDER = ["15m", "1h", "4h"];
+export const HORIZON_CHOICES: [string, string][] = [["15m", "15 minuti"], ["1h", "1 ora"], ["4h", "4 ore"]];
 export const horizonName = (h: string) => HORIZON_CHOICES.find(([k]) => k === h)?.[1] ?? h;
 
 // ------------------------------------------------------------------ watchlist (Checker ranking)
@@ -185,7 +185,7 @@ export function HorizonLadder({ snap, selected, onSelect }: { snap: Snapshot | u
         })}
       </div>
       <p className="note" style={{ marginTop: 8 }}>
-        Ogni riga è calcolata da {snap?.fans?.["1m"] ? "24" : "più"} futuri campionati da Kronos. A fianco, la quota di previsioni
+        Ogni riga è calcolata da {snap?.fans?.["15m"] ? "24" : "più"} futuri campionati da Kronos. A fianco, la quota di previsioni
         verificate a scadenza in cui la direzione era corretta.
       </p>
     </div>

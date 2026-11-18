@@ -39,6 +39,10 @@ class Settings:
     decision_tokenizer: str = os.getenv("PP_DECISION_TOKENIZER", "NeoQuasar/Kronos-Tokenizer-base")
     kronos_max_context: int = _i("PP_KRONOS_MAX_CONTEXT", 512)
     lookback: int = _i("PP_LOOKBACK", 128)  # bars fed to the model (CPU budget)
+    # Kronos-base: 64 15m bars (16 h) keep one 32-step forecast at ~20 s per token on CPU (128 bars: ~44 s)
+    base_lookback: int = _i("PP_BASE_LOOKBACK", 64)
+    base_tokens: int = _i("PP_BASE_TOKENS", 20)  # tokens analysed with Kronos-base, by market cap
+    scan_age_s: float = _f("PP_SCAN_AGE", 300.0)  # a token is re-forecast once its forecast is this old
     n_samples: int = _i("PP_SAMPLES", 24)  # sampled futures per prediction
     temperature: float = _f("PP_TEMPERATURE", 1.0)
     top_p: float = _f("PP_TOP_P", 0.9)
@@ -103,16 +107,11 @@ settings = Settings()
 # Horizons shown on the dashboard: label -> (seconds, timeframe used, steps on that timeframe)
 TIMEFRAMES = {"5s": 5, "1m": 60, "5m": 300, "15m": 900}
 HORIZONS: dict[str, tuple[int, str, int]] = {
-    "5s": (5, "5s", 1),
-    "10s": (10, "5s", 2),
-    "30s": (30, "5s", 6),
-    "1m": (60, "1m", 1),
-    "5m": (300, "1m", 5),
-    "15m": (900, "1m", 15),
-    "30m": (1800, "5m", 6),
-    "1h": (3600, "5m", 12),
+    # user rule: only 15 min, 1 h and 4 h, all read from ONE 15m forecast per token (Kronos-base at <= 20 s per token)
+    "15m": (900, "15m", 1),
+    "1h": (3600, "15m", 4),
     "4h": (14400, "15m", 16),
 }
 # steps sampled per timeframe: the cone on the chart goes this far (1m: 30 min, 5m: 2 h, 15m: 8 h)
 PRED_LEN = {"5s": 12, "1m": 30, "5m": 24, "15m": 32}
-EXPERIMENTAL_HORIZONS = {"5s", "10s", "30s"}  # sub-minute: outside Kronos' training resolution
+EXPERIMENTAL_HORIZONS: set[str] = set()  # sub-minute horizons were removed
