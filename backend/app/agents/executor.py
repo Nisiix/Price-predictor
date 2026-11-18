@@ -1,11 +1,15 @@
 """Executor agent: opens positions on the Checker's signals and closes them.
 
-Close rules (from the spec):
+Entry (user rules): long only, on the breakout of the last hour's high (the roof) when Kronos predicts a large
+4h move and is not against the long; a fresh forecast with more samples confirms it right before the order. Margin
+by extra-risk tier, cross-margin sizing with the liquidation at least 50% below the entry, exposure caps.
+
+Close rules (user rules: NO stop loss, a losing position is never closed by the agents):
   1. liquidation;
-  2. take profit when the leveraged move reaches +5% (e.g. +0.5% on the
-     token at 10x); a stop loss is set automatically at -2% leveraged from the
-     entry;
-  3. on order of the Analyst, whatever the current PnL.
+  2. protective stop at +2% NET on the margin, armed once the price is one 15m ATR above that level;
+  3. a confirmed 4h reversal of the forecast, only when the position is not at a loss;
+  4. break-even exit: at net break-even or better while the forecast is bearish at 15 min, 1 h and 4 h;
+  5. the Analyst's emergency close, which also keeps losing positions open.
 Every closed trade is sent to the Controller.
 
 Modes
@@ -25,7 +29,6 @@ import json
 import os
 import re
 
-import numpy as np
 import logging
 import time
 from dataclasses import asdict, dataclass, field, fields
@@ -33,6 +36,7 @@ from pathlib import Path
 
 from ..config import settings
 from ..predict.probability import horizon_index, trade_levels
+from .indicators import atr_pct
 
 log = logging.getLogger("executor")
 _ids = itertools.count(1)
@@ -73,6 +77,9 @@ class Position:
     peak_lev_move: float = 0.0
     last_pred_ts: float = 0.0
     reverse_count: int = 0
+    # break-even exit: long probability at 15 min, 1 h and 4 h on the latest forecast, and whether all are bearish
+    p_up_h: dict = field(default_factory=dict)
+    bearish_all: bool = False
 
     def view(self) -> dict:
         d = asdict(self)
@@ -236,14 +243,15 @@ class Executor:
             out.append((p.qty * (p.last_price or p.entry), m.mmr if m else 0.05))
         return out
 
-    def forecast_still_valid(self, sym: str, side: int, price: float) -> tuple[bool, str]:
-        """Right before entering: the latest 4h forecast must still point our way from the CURRENT price
-        (probability above the threshold and median above the live price plus costs, mirrored for shorts)."""
-        if self.predictor is None:
+    def forecast_still_valid(self, sym: str, side: int, price: float, forecast: dict | None = None) -> tuple[bool, str]:
+        """Right before entering: the latest 4h forecast (the one just re-computed, when given) must still not be
+        against the position from the CURRENT price (its probability above the threshold, 50%: the breakout gives
+        the direction, Kronos must not contradict it)."""
+        if self.predictor is None and forecast is None:
             return True, ""
         from ..config import HORIZONS
 
-        c = self.predictor.decision_cache(sym)
+        c = forecast if forecast is not None else self.predictor.decision_cache(sym)
         if not c:
             return False, "nessuna previsione a 4 ore disponibile"
         if time.time() - c["ts"] > settings.max_forecast_age_s:
@@ -253,12 +261,8 @@ class Executor:
             return False, "previsione a 4 ore troppo vecchia"
         closes = c["paths"][:, i4, 3]  # 4 hours from now, compared with the live price
         p_dir = float((closes > price).mean()) if side > 0 else float((closes < price).mean())
-        median = float(np.median(closes))
-        costs = 2 * (settings.taker_fee + settings.slippage)
         if p_dir <= settings.min_confidence:
             return False, f"dal prezzo attuale {price:.6g} la probabilità a 4 ore è scesa al {p_dir * 100:.0f}%"
-        if (side > 0 and median <= price * (1 + costs)) or (side < 0 and median >= price * (1 - costs)):
-            return False, f"il prezzo attuale {price:.6g} ha già raggiunto la mediana prevista {median:.6g}"
         return True, ""
 
     @staticmethod
@@ -269,20 +273,37 @@ class Executor:
                 return share
         return settings.risk_tier_above
 
+    def exposure_room(self, sym: str) -> tuple[float, str]:
+        """Notional still allowed by the exposure caps: `max_token_exposure` of the capital on one token and
+        `max_total_exposure` on all open positions together. Returns (notional, which cap binds)."""
+        eq = self.equity()
+        held = sum(p.qty * (p.last_price or p.entry) for p in self.open_positions() if p.symbol == sym)
+        total = sum(n for n, _ in self._exposures())
+        token_room = max(0.0, settings.max_token_exposure * eq - held)
+        total_room = max(0.0, settings.max_total_exposure * eq - total)
+        if token_room <= total_room:
+            return token_room, f"esposizione massima per token {settings.max_token_exposure * 100:.0f}% del capitale"
+        return total_room, f"esposizione totale massima {settings.max_total_exposure * 100:.0f}% del capitale"
+
     def size_margin(self, sym: str, leverage: float, side: int = 1, risk: float = 0.0) -> tuple[float, str]:
-        """Margin = risk tier x total capital, then capped so that, even if every open position and the new one moved
+        """Margin = risk tier x total capital, then capped by the exposure caps (notional per token and in total, as
+        a share of the capital) and, for longs, so that even if every open position and the new one moved
         `liq_min_distance` against us at the same time, the account would still be above maintenance:
         sum(N_j * (d + mmr_j)) + N_new * (d + mmr_new) <= equity. That keeps each liquidation price at
         least d (50%) away from its entry."""
+        cap_notional, cap_why = self.exposure_room(sym)
         if side < 0:
             # user rule: the liquidation-distance sizing applies to longs only; shorts use the fixed margin
-            # as long as the account has that much free collateral left
+            # as long as the account has that much free collateral left (and the exposure caps allow it)
             target = self.risk_share(risk) * self.equity()
             used = sum(p.margin for p in self.open_positions())
             free = self.equity() - used
             if free < target:
                 return 0.0, f"collaterale libero insufficiente ({free:.2f} USDC) per uno short da {target:.2f} USDC"
-            return target, ""
+            margin = min(target, cap_notional / leverage)
+            if margin < settings.min_margin_usdc:
+                return 0.0, f"raggiunta l'{cap_why}"
+            return margin, ""
         d = settings.liq_min_distance
         c = 2 * (settings.taker_fee + settings.slippage) + 0.001  # entry/exit costs and a small buffer
         mmr = self.feed.markets[sym].mmr
@@ -291,8 +312,10 @@ class Executor:
         if self.risk_share(risk) <= 0:
             return 0.0, f"rischio {risk * 100:.0f}% oltre l'ultima fascia: nessuna apertura"
         target = self.risk_share(risk) * self.equity()  # 3%-10% of total capital by risk
-        margin = min(target, notional / leverage)
+        margin = min(target, notional / leverage, cap_notional / leverage)
         if margin < settings.min_margin_usdc:
+            if cap_notional < notional:
+                return 0.0, f"raggiunta l'{cap_why}"
             return 0.0, f"capitale insufficiente per tenere la liquidazione al {d * 100:.0f}% dall'entrata"
         return margin, ""
 
@@ -333,19 +356,23 @@ class Executor:
             return False, "saldo simulato insufficiente"
         return True, ""
 
-    async def open_from_signal(self, sig: dict) -> None:
+    async def open_from_signal(self, sig: dict, forecast: dict | None = None) -> None:
         sym = sig["symbol"]
         price = self._price(sym)
         if not price:
             return
         side = 1 if sig["side"] == "long" else -1
         snapshot = {k: sig.get(k) for k in ("kronos_p_tp", "kronos_p_sl", "combined_prob", "extra_risk", "score", "ev",
-                                            "source", "p_up_4h", "conf_4h", "range_pos", "p_up_8h", "dip_price")}
+                                            "source", "p_up_4h", "conf_4h", "range_pos", "amplitude", "roof")}
         snapshot["regime"] = sig["indicators"]["regime"]
         snapshot["rsi"] = sig["indicators"]["rsi"]
         snapshot["analog_win"] = sig.get("analog_dir")
         snapshot["macro_risk"] = self.checker.macro_risk
-        ok, why = self.forecast_still_valid(sym, side, price)
+        ok, why = self.forecast_still_valid(sym, side, price, forecast)
+        if ok and sig.get("breakout_price") and side > 0 and not sig["breakout_price"] < price <= sig["chase_price"]:
+            ok = False  # the breakout must still be there at the moment of the order
+            why = (f"il prezzo {price:.6g} è tornato sotto il tetto {sig['roof']:.6g}" if price <= sig["breakout_price"]
+                   else f"il prezzo {price:.6g} è salito oltre {sig['chase_price']:.6g}, troppo lontano dal tetto")
         if not ok:
             self.cooldown[sym] = time.time() + 120
             self.bus.agent_log("Executor", f"{sig['base']}: apertura annullata, {why}", "warn")
@@ -366,12 +393,12 @@ class Executor:
         self.balance -= p.margin + p.fees
         self.positions[p.id] = p
         p.liq = self.cross_liq(p)
-        where = "minimo" if side > 0 else "massimo"
         self.bus.agent_log(
             "Executor",
             f"Aperta {'LONG' if side > 0 else 'SHORT'} simulata su {p.base} {p.leverage:.0f}x, margine {p.margin:.2f} USDC, a {p.entry:.6g} "
-            f"vicino al {where} delle 4 ore (liquidazione {p.liq:.6g}, {abs(p.liq / p.entry - 1) * 100:.0f}% dall'entrata); Kronos 4h {(sig.get('conf_4h') or 0) * 100:.0f}% "
-            f"{'in rialzo' if side > 0 else 'in ribasso'}, rischio aggiuntivo {sig['extra_risk'] * 100:.0f}%", "success",
+            f"sulla rottura del tetto dell'ultima ora {sig.get('roof') or 0:.6g} (liquidazione {p.liq:.6g}, "
+            f"{abs(p.liq / p.entry - 1) * 100:.0f}% dall'entrata); movimento previsto a 4 ore {(sig.get('amplitude') or 0) * 100:.1f}%, "
+            f"Kronos 4h {(sig.get('p_up_4h') or 0) * 100:.0f}% in rialzo, rischio aggiuntivo {sig['extra_risk'] * 100:.0f}%", "success",
         )
 
     async def manual_order(self, sym: str, side: str, leverage: float, margin: float, order_type: str,
@@ -451,25 +478,50 @@ class Executor:
             return "liquidazione"
         if p.sl > 0 and ((p.side > 0 and price <= p.sl) or (p.side < 0 and price >= p.sl)):
             if p.locked:
-                return f"stop di protezione +{settings.lock_profit_pct:g}% (leva)"
+                return f"stop di protezione +{settings.lock_profit_pct:g}% netto"
             return f"stop loss {-settings.stop_loss_pct:g}% (leva)"
-        if not p.locked and p.lev_move >= settings.lock_trigger_pct:
-            self._lock_profit(p)
+        if not p.locked:
+            level, trigger = self.lock_levels(p)
+            if (p.side > 0 and price >= trigger) or (p.side < 0 and price <= trigger):
+                self._lock_profit(p, level)
         if p.tp > 0 and ((p.side > 0 and price >= p.tp) or (p.side < 0 and price <= p.tp)):
             return f"take profit +{settings.take_profit_pct:.0f}% (leva)"
         reason = self._reversal(p)
         if reason and settings.hold_losers and p.pnl < 0:
             return None  # user rule: a losing position is never closed by the agents (only liquidation)
+        if not reason and settings.be_exit and p.bearish_all and p.pnl >= 0:
+            # pnl is already net of the exit fee and slippage, entry fee and funding: closing now is >= break-even
+            h = p.p_up_h
+            return (f"uscita in pari netto: previsioni al ribasso a 15 min, 1 h e 4 h (rialzo "
+                    f"{h.get('15m', 0) * 100:.0f}% / {h.get('1h', 0) * 100:.0f}% / {h.get('4h', 0) * 100:.0f}%)")
         return reason
 
-    def _lock_profit(self, p: Position) -> None:
-        """After +5% leveraged, move the stop to +2% leveraged profit (never below the current stop)."""
-        new_sl = p.entry * (1 + p.side * settings.lock_profit_pct / 100 / p.leverage)
+    def lock_levels(self, p: Position) -> tuple[float, float]:
+        """Protective stop: (stop level, price that arms it).
+        The level is where closing the position leaves +`lock_profit_pct`% NET on the margin: exit slippage, entry
+        and exit fees and the funding paid so far included (the old +2% was gross, a net loss at 15x and 20x).
+        It is armed only once the price is `lock_atr_mult` 15m ATR beyond that level, so ordinary noise does not
+        hit it right away."""
+        fees = 2 * settings.taker_fee + max(p.funding, 0.0) / p.notional if p.notional else 2 * settings.taker_fee
+        move = settings.lock_profit_pct / 100 / p.leverage + fees  # needed after the exit slippage
+        if p.side > 0:
+            level = p.entry * (1 + move) / (1 - settings.slippage)
+        else:
+            level = p.entry * (1 - move) / (1 + settings.slippage)
+        bars = self.feed.store.get(p.symbol, "15m", 40) if hasattr(self.feed.store, "get") else []
+        atr = atr_pct(bars[:-1]) if len(bars) > 15 else 0.0
+        atr = max(atr, 0.002)  # at least 0.2% of price when the 15m candles are not there yet
+        trigger = level * (1 + p.side * settings.lock_atr_mult * atr)
+        return level, trigger
+
+    def _lock_profit(self, p: Position, new_sl: float) -> None:
+        """Move the stop to the +2% net level (never back from the current stop)."""
         if p.sl > 0 and ((p.side > 0 and new_sl <= p.sl) or (p.side < 0 and new_sl >= p.sl)):
             return
         p.sl, p.locked = new_sl, True
         self.bus.agent_log(
-            "Executor", f"{p.base}: raggiunto +{settings.lock_trigger_pct:g}% con leva, stop spostato a +{settings.lock_profit_pct:g}% di profitto ({new_sl:.6g})",
+            "Executor", f"{p.base}: prezzo oltre {settings.lock_atr_mult:g} ATR sopra il livello di protezione, "
+                        f"stop a {new_sl:.6g} (+{settings.lock_profit_pct:g}% netto sul margine)",
             "success",
         )
         if p.mode == "real":
@@ -487,9 +539,23 @@ class Executor:
         p.last_pred_ts = c["ts"]
         from ..config import HORIZONS
 
-        closes = c["paths"][:, HORIZONS["4h"][2] - 1, 3]
-        p_up = float((closes > c["last"]).mean())
+        # same reading as the entry: the close 4 hours from NOW on this forecast, against the live price
+        i4 = horizon_index(c["bar_t"], 900, HORIZONS["4h"][2], c["paths"].shape[1], time.time()) if "bar_t" in c else HORIZONS["4h"][2] - 1
+        if i4 is None:
+            return None
+        closes = c["paths"][:, i4, 3]
+        live = self._price(p.symbol) or c["last"]
+        p_up = float((closes > live).mean())
         p.p_dir_now = p_up if p.side > 0 else 1 - p_up
+        # break-even exit: the same forecast read 15 min and 1 h ahead of now too (all three horizons bearish)
+        p_up_h = {"4h": p_up}
+        for h in ("15m", "1h"):
+            ih = horizon_index(c["bar_t"], 900, HORIZONS[h][2], c["paths"].shape[1], time.time()) if "bar_t" in c else HORIZONS[h][2] - 1
+            if ih is not None:
+                p_up_h[h] = float((c["paths"][:, ih, 3] > live).mean())
+        p.p_up_h = p_up_h
+        dirs = [v if p.side > 0 else 1 - v for v in p_up_h.values()]
+        p.bearish_all = len(dirs) == 3 and all(d < settings.be_exit_max_up for d in dirs)
         if p.p_dir_now < 0.5 - settings.exit_margin:
             p.reverse_count += 1
         else:
@@ -588,33 +654,34 @@ class Executor:
             return  # one per cycle
 
     async def _confirm_and_open(self, sig: dict) -> None:
-        """Before entering, run Kronos again on the token and re-evaluate: enter only if the fresh forecast
-        still says this is the entry point, not if it now shows a further drop ahead."""
+        """The price broke the roof: run Kronos again on the token (more samples) and re-evaluate with that forecast;
+        enter only if it still predicts a large enough move, is not against the long, and the price is still in the
+        breakout band (above the roof, not too far above it)."""
         sym = sig["symbol"]
         try:
+            fresh = None
             if self.predictor is not None:
-                await asyncio.to_thread(self.predictor.run_decision, sym)  # large model when loaded
-            new = await asyncio.to_thread(self.checker.evaluate, sym, True)
-            if new and not new["eligible"] and not new["entry_ok"] and new["dip_price"] < sig["dip_price"]:
-                # the fresh forecast sees a further drop: same logic again with the new, lower entry point
-                # (no cooldown: the Checker keeps watching and the next approach triggers a new re-prediction)
-                self.bus.agent_log(
-                    "Executor",
-                    f"{sig['base']}: la nuova previsione vede un ulteriore ribasso, nuovo punto d'ingresso "
-                    f"{new['dip_price']:.6g} (prima {sig['dip_price']:.6g}), attendo che il prezzo ci arrivi", "info",
-                )
-                return
+                # a NEW forecast, computed now (after the breakout) with more samples; the decision below uses
+                # exactly this one
+                started = time.time()
+                fresh = await asyncio.to_thread(self.predictor.run_decision, sym)
+                if not fresh or fresh["ts"] < started:
+                    self.cooldown[sym] = time.time() + 180
+                    self.bus.agent_log("Executor", f"{sig['base']}: nuova previsione non disponibile, ingresso rinviato", "info")
+                    return
+            new = await asyncio.to_thread(self.checker.evaluate, sym, True, fresh)
             if not new or not new["eligible"]:
                 why = ", ".join(new["reasons"]) if new else "previsione non disponibile"
                 self.cooldown[sym] = time.time() + 180
-                self.bus.agent_log("Executor", f"{sig['base']}: previsione ricalcolata prima dell'ingresso, rinvio ({why})", "info")
+                self.bus.agent_log("Executor", f"{sig['base']}: previsione ricalcolata sulla rottura, nessun ingresso ({why})", "info")
                 return
             self.bus.agent_log(
                 "Executor",
-                f"{sig['base']}: previsione ricalcolata con {new.get('model') or 'Kronos'}, punto d'ingresso confermato (4 ore {new['conf_4h'] * 100:.0f}%, "
-                f"8 ore {new['p_up_8h'] * 100:.0f}% di rialzo)", "info",
+                f"{sig['base']}: previsione ricalcolata con {new.get('model') or 'Kronos'}, rottura confermata "
+                f"(movimento previsto {new['amplitude'] * 100:.1f}%, rialzo a 4 ore {new['p_up_4h'] * 100:.0f}% su "
+                f"{new.get('samples') or ''} campioni)", "info",
             )
-            await self.open_from_signal(new)
+            await self.open_from_signal(new, fresh)
         except Exception:
             log.exception("confirmation before entry failed for %s", sym)
         finally:
@@ -731,8 +798,12 @@ class Executor:
             "risk_tiers": [list(t) for t in settings.risk_tiers], "risk_tier_above": settings.risk_tier_above,
             "tp_pct": settings.take_profit_pct, "sl_pct": settings.stop_loss_pct,
             "use_tp": settings.use_take_profit, "exit_margin": settings.exit_margin,
-            "exit_confirmations": settings.exit_confirmations, "entry_zone": settings.entry_zone,
-            "lock_trigger_pct": settings.lock_trigger_pct, "lock_profit_pct": settings.lock_profit_pct,
+            "exit_confirmations": settings.exit_confirmations, "min_conf": settings.min_confidence,
+            "min_move": settings.min_move, "roof_bars": settings.roof_bars, "breakout_buffer": settings.breakout_buffer,
+            "breakout_max_chase": settings.breakout_max_chase, "be_exit": settings.be_exit,
+            "be_exit_max_up": settings.be_exit_max_up,
+            "lock_atr_mult": settings.lock_atr_mult, "lock_profit_pct": settings.lock_profit_pct,
+            "max_token_exposure": settings.max_token_exposure, "max_total_exposure": settings.max_total_exposure,
             "liq_min_distance": settings.liq_min_distance, "equity_now": self.equity(), "paper": self.paper_view(),
             "hold_losers": settings.hold_losers, "longs_only": settings.longs_only,
             "use_initial_stop": settings.use_initial_stop, "recovery_hours": settings.recovery_hours,

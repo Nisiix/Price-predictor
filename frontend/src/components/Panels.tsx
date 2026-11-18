@@ -23,11 +23,11 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
 }) {
   const [q, setQ] = useState("");
   const [onlyStrong, setOnlyStrong] = useState<boolean>(() => {
-    try { return localStorage.getItem("pp.only70") !== "0"; } catch { return true; }
+    try { return localStorage.getItem("pp.bigMove") === "1"; } catch { return false; }
   });
   const toggleStrong = (v: boolean) => {
     setOnlyStrong(v);
-    try { localStorage.setItem("pp.only70", v ? "1" : "0"); } catch { /* ignore */ }
+    try { localStorage.setItem("pp.bigMove", v ? "1" : "0"); } catch { /* ignore */ }
   };
   // the Executor opens longs only: by default the list shows upward forecasts only
   const [showDown, setShowDown] = useState<boolean>(() => {
@@ -61,7 +61,7 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
       .filter((x) => !ql || x.m.base.toLowerCase().includes(ql) || x.m.name.toLowerCase().includes(ql))
       // tokens with an open position are not analysed by the Checker: they stay at the top with a tag
       .filter((x) => held.includes(x.s) || x.k != null || (showDown && !onlyStrong)) // without a pick: still being computed, or no upward horizon
-      .filter((x) => held.includes(x.s) || !onlyStrong || (x.k != null && x.k.conf > STRONG_PROB))
+      .filter((x) => held.includes(x.s) || !onlyStrong || (x.r != null && x.r.amplitude >= MIN_MOVE))
       .sort((a, b) => Number(held.includes(b.s)) - Number(held.includes(a.s)) || sortKey(b.k, sortBy) - sortKey(a.k, sortBy) || a.m.rank - b.m.rank);
   }, [markets, byRank, q, sortBy, onlyStrong, showDown, held]);
 
@@ -72,7 +72,7 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
       </h2>
       <label className="switch" style={{ padding: "0 8px", marginBottom: 6, fontSize: 12.5 }}>
         <input type="checkbox" checked={onlyStrong} onChange={(e) => toggleStrong(e.target.checked)} />
-        Solo probabilità sopra il 70% {ready > 0 && <span className="faint">({rows.length} di {ready})</span>}
+        Solo movimento previsto a 4 ore oltre l'1,5% {ready > 0 && <span className="faint">({rows.length} di {ready})</span>}
       </label>
       <label className="switch" style={{ padding: "0 8px", marginBottom: 6, fontSize: 12.5 }}>
         <input type="checkbox" checked={showDown} onChange={(e) => toggleDown(e.target.checked)} />
@@ -96,7 +96,8 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
                 <span className="name">
                   {m.base}
                   {r?.eligible && <span className="go" title={`Segnale valido per l'Executor: ${r.side} ${r.leverage}x`} />}
-                  {r && r.drop_priority > 0 && <span className="droptag" title="Calo recente oltre il 5%: precedenza in apertura (non cambia la decisione)">↓{(r.drop_priority * 100).toFixed(1)}% {r.drop_window}</span>}
+                  {r && r.amplitude >= MIN_MOVE && <span className="droptag" title="Movimento previsto da Kronos nelle prossime 4 ore, in un verso o nell'altro: precedenza in apertura">±{(r.amplitude * 100).toFixed(1)}%</span>}
+                  {r?.breakout && <span className="droptag long" title={`Prezzo sopra il tetto dell'ultima ora (${price(r.roof)})`}>rottura</span>}
                 </span>
                 <span className={`prob ${k ? k.side : "faint"}`}>
                   {k ? <>{k.side === "long" ? "▲" : "▼"} {pct(k.conf)}</> : "–"}
@@ -124,7 +125,7 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
         })}
         {!rows.length && (
           <li className="empty" style={{ padding: 8 }}>
-            {q ? "Nessun token corrisponde alla ricerca." : `Nessun token ${showDown ? "" : "in rialzo "}${onlyStrong ? "supera il 70% di probabilità " : ""}su nessun orizzonte. Allarga i filtri o attendi i prossimi calcoli.`}
+            {q ? "Nessun token corrisponde alla ricerca." : `Nessun token ${showDown ? "" : "in rialzo "}${onlyStrong ? "con un movimento previsto oltre l'1,5% " : ""}su nessun orizzonte. Allarga i filtri o attendi i prossimi calcoli.`}
           </li>
         )}
       </ul>
@@ -133,7 +134,7 @@ export function Watchlist({ markets, ranking, prices, focus, onFocus, paused, pa
 }
 
 type SortMode = "prob" | "risk" | "combo";
-const STRONG_PROB = 0.7;
+const MIN_MOVE = 0.015; // PP_MIN_MOVE: smallest predicted 4h move the Executor trades
 const SORTS: [SortMode, string][] = [["prob", "Probabilità"], ["risk", "Rischio più basso"], ["combo", "Probabilità e rischio"]];
 function sortKey(k: HorizonPick | null, mode: SortMode): number {
   if (!k) return -1;
@@ -210,22 +211,22 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
   const withPattern = ranking.some((r) => r.analog_win != null);
   return (
     <div className="panel">
-      <h2>Checker <small>{ranking.length ? `${ranking.length} token, piano a 4 ore ordinato per probabilità × (1 − rischio)` : "in attesa delle previsioni a 4 ore"}</small></h2>
+      <h2>Checker <small>{ranking.length ? `${ranking.length} token, ordinati per movimento previsto a 4 ore` : "in attesa delle previsioni a 4 ore"}</small></h2>
       {paused && <p className="note warn">Nuove aperture sospese dall'Analyst: {pauseReason}</p>}
       {ranking.length === 0 ? <p className="empty">Il Checker pubblica la classifica quando Kronos ha calcolato le 4 ore dei token (pochi minuti dall'avvio).</p> : (
         <div className="scroll" style={{ maxHeight: 380, overflowY: "auto" }}>
           <table className="t">
             <thead>
-              <tr><th>Token</th><th>Kronos 4 ore</th><th>8 ore</th><th>Ingresso previsto</th><th>Leva</th>{withPattern && <th className="n">Pattern</th>}<th className="n">Rischio</th><th className="n">Punteggio</th><th>Range 4 ore</th><th>Esito</th></tr>
+              <tr><th>Token</th><th>Kronos 4 ore</th><th className="n">Movimento previsto</th><th>Tetto ultima ora</th><th>Leva</th>{withPattern && <th className="n">Pattern</th>}<th className="n">Rischio</th><th className="n">Punteggio</th><th>Range 4 ore</th><th>Esito</th></tr>
             </thead>
             <tbody>
               {ranking.map((r) => (
                 <tr key={r.symbol} className={`clickable ${focus === r.symbol ? "cur" : ""}`} onClick={() => onFocus(r.symbol)}>
-                  <td><b>{r.base}</b>{r.drop_priority > 0 && <span className="droptag" title="Calo recente oltre il 5%: precedenza in apertura">↓{(r.drop_priority * 100).toFixed(1)}% {r.drop_window}</span>}</td>
+                  <td><b>{r.base}</b></td>
                   <td className={r.side}>{r.side === "long" ? "▲ rialzo" : "▼ ribasso"} {pct(r.conf_4h)}</td>
-                  <td className={r.p_up_8h >= 0.5 ? "long" : "short"}>{r.p_up_8h >= 0.5 ? "▲" : "▼"} {pct(Math.max(r.p_up_8h, 1 - r.p_up_8h))}</td>
-                  <td title={`Punto più basso previsto da Kronos nelle prossime 4 ore, tra circa ${r.dip_minutes} min`}>
-                    {price(r.dip_price)} {r.entry_ok ? <span className="long">· raggiunto</span> : <span className="faint">· {signed((r.dip_price / r.price - 1) * 100, 2)}%</span>}
+                  <td className="n" title="Media del movimento a 4 ore dei percorsi di Kronos, in un verso o nell'altro" style={{ color: r.amplitude >= MIN_MOVE ? "var(--long)" : undefined }}>±{(r.amplitude * 100).toFixed(1)}%</td>
+                  <td title={`Massimo delle ultime candele da 15 minuti chiuse: il long apre sopra ${price(r.breakout_price)}, non oltre ${price(r.chase_price)}`}>
+                    {price(r.roof)} {r.breakout ? <span className="long">· rotto</span> : r.price > r.chase_price ? <span className="faint">· già oltre</span> : <span className="faint">· {signed((r.breakout_price / r.price - 1) * 100, 2)}%</span>}
                   </td>
                   <td>{r.leverage}x</td>
                   {withPattern && <td className="n">{r.analog_win != null ? pct(r.analog_win) : "–"}</td>}
@@ -240,8 +241,7 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
         </div>
       )}
       <p className="note" style={{ marginTop: 8 }}>
-        I token con una posizione aperta non vengono analizzati finché la posizione resta aperta. L'Executor apre solo long, quando la probabilità di rialzo a 4 ore supera il 70% e il trend a 8 ore è al rialzo (il rischio decide la leva) e il prezzo arriva al punto più basso previsto da Kronos; prima di entrare ricalcola la previsione e rinvia se ne vede un ribasso ulteriore; i token con un calo oltre il 5% in 4, 8 o 12 ore hanno la precedenza:
-        vicino al minimo delle ultime 4 ore per un long, vicino al massimo per uno short. Seleziona una riga per l'analisi completa.
+        I token con una posizione aperta non vengono analizzati finché la posizione resta aperta. L'Executor apre solo long, in rottura: quando Kronos prevede un movimento ampio nelle prossime 4 ore (in media oltre l'1,5%) e non è contrario al rialzo (oltre il 50%) e il prezzo supera dello 0,1% il massimo dell'ultima ora, cioè il movimento previsto è cominciato verso l'alto; se il prezzo scende non apre nulla, e oltre l'1% sopra il tetto è troppo tardi. Prima di entrare ricalcola la previsione con 96 campioni ed entra solo se conferma. Ha la precedenza il movimento previsto più ampio; il rischio non blocca mai, decide solo il margine (oltre il 40% il 3% del capitale), con al massimo il 50% del capitale esposto per token e il 150% in totale. Seleziona una riga per l'analisi completa.
       </p>
     </div>
   );
@@ -262,7 +262,7 @@ export function Verdict({ snap }: { snap: Snapshot | undefined }) {
   const an = c.analogs;
   const labels: Record<string, string> = {
     kronos_avverso: "Kronos: direzione opposta", indicatori_contrari: "Indicatori contrari", pattern_storici: "Pattern storici contrari",
-    volatilita: "Volatilità vs stop", macro_analyst: "Rischio macro (Analyst)",
+    volatilita: "Volatilità (non conteggiata)", macro_analyst: "Rischio macro (Analyst)",
   };
   return (
     <div className="panel">
@@ -349,7 +349,7 @@ export function Positions({ ex, onToast, realClose }: { ex: ExecutorView | null;
         <div><span>Posizioni</span><b>{ex.max_positions ? `${ex.positions.length} / ${ex.max_positions}` : ex.positions.length}</b></div>
         <div title={(ex.risk_tiers ?? []).map(([r, s]) => `rischio ≤${Math.round(r * 100)}%: ${Math.round(s * 100)}%`).join(" · ") + ` · oltre: ${Math.round((ex.risk_tier_above ?? 0) * 100)}%`}><span>Per operazione</span><b>3–10% del capitale secondo il rischio</b></div>
         <div title="L'importo di ogni apertura è calcolato perché la liquidazione di tutte le posizioni resti almeno a questa distanza dall'entrata"><span>Limite long</span><b>liquidazione a ≥{Math.round(ex.liq_min_distance * 100)}% dall'entrata</b></div>
-        <div><span>Chiusura</span><b style={{ fontSize: 14 }}>{ex.use_tp ? `TP +${ex.tp_pct}% · ` : "inversione 4 ore · "}{ex.use_initial_stop ? `SL −${ex.sl_pct}%` : ex.hold_losers ? "le posizioni in perdita non vengono mai chiuse" : `niente stop in perdita, dopo ${ex.recovery_hours} h esce se il recupero è sotto il ${Math.round(ex.recovery_min_prob * 100)}%`} · da +{ex.lock_trigger_pct}% protegge +{ex.lock_profit_pct}% (con leva)</b></div>
+        <div><span>Chiusura</span><b style={{ fontSize: 14 }}>{ex.use_tp ? `TP +${ex.tp_pct}% · ` : "inversione 4 ore · "}{ex.be_exit ? "in pari netto se 15 min, 1 ora e 4 ore sono al ribasso · " : ""}{ex.use_initial_stop ? `SL −${ex.sl_pct}%` : ex.hold_losers ? "le posizioni in perdita non vengono mai chiuse" : `niente stop in perdita, dopo ${ex.recovery_hours} h esce se il recupero è sotto il ${Math.round(ex.recovery_min_prob * 100)}%`} · stop di protezione a +{ex.lock_profit_pct}% netto sul margine, attivo {ex.lock_atr_mult} ATR sopra</b></div>
         <label className="switch" style={{ marginLeft: "auto" }}>
           <input type="checkbox" checked={ex.auto} onChange={toggleAuto} /> Apertura automatica
         </label>
@@ -377,7 +377,7 @@ export function Positions({ ex, onToast, realClose }: { ex: ExecutorView | null;
                         <div className="z" style={{ left: `${zero}%` }} />
                         <div className="m" style={{ left: `${Math.min(zero, at)}%`, width: `${Math.abs(at - zero)}%`, background: p.lev_move >= 0 ? "var(--long)" : "var(--short)" }} />
                       </div>
-                      <span className="faint" style={{ fontSize: 11 }}>{signed(p.lev_move, 2)}% leva · {p.locked ? <><span className="long">SL protetto +{ex.lock_profit_pct}%</span> {price(p.sl)}</> : p.sl > 0 ? <>SL {price(p.sl)}</> : p.recovery_prob != null ? <span style={{ color: p.recovery_prob >= ex.recovery_min_prob ? "var(--long)" : "var(--warn)" }}>recupero {pct(p.recovery_prob)}</span> : "nessuno stop"} · liq {price(p.liq)}</span>
+                      <span className="faint" style={{ fontSize: 11 }}>{signed(p.lev_move, 2)}% leva · {p.locked ? <><span className="long">SL protetto +{ex.lock_profit_pct}% netto</span> {price(p.sl)}</> : p.sl > 0 ? <>SL {price(p.sl)}</> : p.recovery_prob != null ? <span style={{ color: p.recovery_prob >= ex.recovery_min_prob ? "var(--long)" : "var(--warn)" }}>recupero {pct(p.recovery_prob)}</span> : "nessuno stop"} · liq {price(p.liq)}</span>
                     </td>
                     <td style={{ fontSize: 12 }}>
                       {p.p_dir_now != null ? (
@@ -386,6 +386,7 @@ export function Positions({ ex, onToast, realClose }: { ex: ExecutorView | null;
                         </span>
                       ) : "–"}
                       {p.reverse_count > 0 && <div className="faint">inversione {p.reverse_count}/{ex.exit_confirmations}</div>}
+                      {ex.be_exit && p.bearish_all && <div style={{ color: "var(--warn)" }} title={`Rialzo previsto: 15 min ${pct(p.p_up_h["15m"])}, 1 ora ${pct(p.p_up_h["1h"])}, 4 ore ${pct(p.p_up_h["4h"])}`}>tutti al ribasso: esce in pari</div>}
                     </td>
                     <td className={`n ${p.pnl >= 0 ? "long" : "short"}`}>{signed(p.pnl)}<br /><span style={{ fontSize: 11 }}>{signed(p.roe, 1)}%</span></td>
                     <td className="n"><button className="ghost danger" onClick={() => close(p)} disabled={p.status !== "open"}>{p.status === "closing" ? "In chiusura" : "Chiudi"}</button></td>

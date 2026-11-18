@@ -4,29 +4,31 @@ Dashboard in tempo reale che usa [Kronos](https://github.com/shiyu-coder/Kronos)
 
 | Agente | Cosa fa |
 |---|---|
-| **Checker** | Per ogni token stima con Kronos la probabilità di toccare il take profit (+5% con leva) prima dello stop loss (−2%) o della liquidazione, per long e short da 10x a 20x. Aggiunge indicatori (EMA 9/21/50, RSI, MACD, Bollinger, ATR, volumi) e una ricerca dei 25 pattern storici più simili sullo stesso token e sugli altri, da cui ricava un **rischio aggiuntivo** mostrato accanto alla probabilità di Kronos. |
-| **Analyst** | Legge notizie crypto e macro (CoinDesk, Cointelegraph, Decrypt, Google News) e le confronta con un archivio di eventi storici (Mt. Gox, FTX, Terra, COVID, SVB, dazi 2025, guerre…) che hanno mosso BTC e altcoin. Con shock di mercato e Fear & Greed calcola un rischio da 0 a 100: sopra 55 sospende le nuove aperture, sopra 70 (o con una notizia critica, o con BTC/ETH/SOL −3% in 5 minuti) ordina all'Executor di chiudere tutto. |
-| **Executor** | Strategia a 4 ore: apre le posizioni segnalate dal Checker con probabilità Kronos a 4 ore oltre il 70%, a prescindere dal rischio (leva da 10x a 20x in base al rischio), solo quando il prezzo è vicino al minimo delle ultime 4 ore (long) o al massimo (short). Apre solo long; tra i token idonei dà precedenza a quelli con un calo oltre il 5% nelle ultime 4, 8 o 12 ore. Chiude una posizione in profitto quando la previsione Kronos a 4 ore si inverte rispetto all'apertura (scarto: la direzione opposta deve superare il 60%, con due previsioni consecutive) o su ordine dell'Analyst; le posizioni in perdita non vengono mai chiuse dagli agenti (`PP_HOLD_LOSERS=0` per cambiarlo), resta solo la liquidazione, tenuta lontana dal dimensionamento. Non c'è uno stop in perdita: dopo 2 ore una posizione in perdita viene chiusa solo se la proiezione Kronos a 4 ore dà meno del 50% di probabilità di tornare in pari (`PP_RECOVERY_HOURS`, `PP_RECOVERY_MIN_PROB`; `PP_USE_SL=1` ripristina lo stop fisso −2% con leva). Dopo un guadagno di +5% con leva viene messo uno stop a mercato a +2% di profitto. Il take profit fisso +5% è disattivato (`PP_USE_TP=1` per riattivarlo). Invia ogni risultato al Controller. |
-| **Controller** | Salva lo storico in SQLite, calcola win rate e PnL per token, pattern, fascia di probabilità, rischio, leva e motivo di chiusura, e verifica a scadenza ogni previsione di Kronos (quota di direzioni corrette per orizzonte). Report scaricabile in Markdown. |
+| **Checker** | Per ogni token legge la previsione Kronos a 4 ore (candele da 15 minuti) contro il prezzo live: l'**ampiezza prevista** (la media del movimento a 4 ore dei percorsi campionati, in un verso o nell'altro) e la probabilità di rialzo. Calcola il **tetto**, cioè il massimo delle ultime 4 candele da 15 minuti chiuse, e segnala la **rottura** quando il prezzo lo supera. Aggiunge indicatori (EMA 9/21/50, RSI, MACD, Bollinger, ATR) e i 25 pattern storici più simili sullo stesso token e sugli altri, da cui ricava un **rischio aggiuntivo** che decide leva e margine, Registra ogni nuova previsione e la sua prima rottura nel registro dei segnali del Controller. |
+| **Analyst** | Legge notizie crypto e macro (CoinDesk, Cointelegraph, Decrypt, Google News) e le confronta con un archivio di eventi storici che hanno mosso BTC e altcoin. Con shock di mercato e Fear & Greed calcola un rischio da 0 a 100 che entra nel rischio aggiuntivo (fascia di margine); non sospende più le aperture (`PP_ANALYST_BLOCKS=1` per farlo sopra 55); sopra 70 (o con una notizia critica, o con BTC/ETH/SOL −3% in 5 minuti) ordina all'Executor di chiudere tutto; per regola le posizioni in perdita restano comunque aperte. |
+| **Executor** | Strategia a 4 ore, solo long, **ingresso in rottura**: apre quando Kronos prevede un movimento ampio (ampiezza almeno 1,5%), non è contrario al rialzo (oltre il 50%) e il prezzo supera il tetto dell'ultima ora dello 0,1%, cioè il movimento previsto è cominciato verso l'alto. Se il prezzo scende non apre nulla; oltre l'1% sopra il tetto è troppo tardi e aspetta un nuovo tetto. Prima di entrare **ricalcola la previsione con 96 campioni e decide su quella**. Tra i token idonei ha la precedenza il movimento previsto più ampio. Chiude una posizione quando la previsione a 4 ore si inverte (direzione opposta oltre il 60% in due previsioni consecutive), con l'**uscita in pari netto** (appena la chiusura non è in perdita, commissioni e funding compresi, se la previsione è al ribasso a 15 minuti, 1 ora e 4 ore) o su ordine dell'Analyst, mai in perdita. **Le posizioni in perdita non vengono mai chiuse** (`PP_HOLD_LOSERS=0` per cambiarlo) e non c'è stop in perdita: resta solo la liquidazione, tenuta ad almeno il 50% dall'entrata. Lo **stop di protezione** va dove la chiusura lascia +2% **netto** sul margine (commissioni, slittamento e funding pagati) e si attiva quando il prezzo è 1 ATR a 15 minuti sopra quel livello. Invia ogni risultato al Controller. |
+| **Controller** | Salva lo storico in SQLite, calcola win rate e PnL per token, pattern, fascia di probabilità, fascia di rischio, leva e motivo di chiusura, mostra le posizioni aperte con il risultato non realizzato, verifica a scadenza ogni previsione (direzione corretta, Brier, copertura della fascia 10-90%) e tiene il **registro dei segnali a 4 ore**: ampiezza prevista contro movimento reale, e il ritorno a 4 ore di tutte le previsioni, di tutte le rotture del tetto e di quelle idonee. Report scaricabile in Markdown. |
 
 ## Simulazione e trading reale
 
-- **Senza wallet** l'Executor opera in simulazione sui prezzi reali di mercato, con commissioni taker, slippage e funding. Nessun ordine viene inviato.
-- **Con Phantom collegato** premi "Attiva trading reale": firmi in Phantom la registrazione del conto Raydium Perps (solo la prima volta) e una **chiave di trading delegata** valida 30 giorni. La chiave può aprire e chiudere posizioni ma **non può prelevare fondi** e resta solo nel tuo browser: il backend non la vede mai. Da quel momento il pannello ordini invia ordini reali (a mercato o limite, con TP/SL) e puoi accendere il trading automatico reale dell'Executor.
+- **Senza wallet** l'Executor opera in simulazione sui prezzi reali di mercato, con commissioni taker, slippage e funding. Nessun ordine viene inviato. Saldo, posizioni e ordini simulati restano salvati in `data/paper_state.json` anche dopo un riavvio.
+- **Con Phantom collegato** premi "Attiva trading reale": firmi in Phantom la registrazione del conto Raydium Perps (solo la prima volta) e una **chiave di trading delegata** valida 30 giorni. La chiave può aprire e chiudere posizioni ma **non può prelevare fondi** e resta solo nel tuo browser: il backend non la vede mai.
 - Il collaterale USDC si deposita su [perps.raydium.io](https://perps.raydium.io) con lo stesso wallet: il conto è lo stesso.
-- TP e SL vengono piazzati anche sul mercato come ordini di posizione, quindi restano attivi anche se la dashboard è chiusa. L'apertura automatica reale invece parte dalla pagina, che deve restare aperta.
+- Per regola non viene messo nessuno stop loss sul mercato. Lo stop di protezione in profitto viene inviato al mercato quando si attiva. Aperture e chiusure automatiche reali partono dalla pagina, che deve restare aperta: a dashboard chiusa resta solo la liquidazione.
 
-> Il trading a leva comporta il rischio di perdere l'intero margine. Le probabilità sono stime di un modello, non garanzie: controlla nel pannello del Controller quanto spesso Kronos ha avuto ragione prima di usare soldi veri.
+> Il trading a leva comporta il rischio di perdere l'intero margine, e con le posizioni in perdita mai chiuse anche di più del margine di una singola posizione. Le probabilità sono stime di un modello, non garanzie: controlla il registro dei segnali e il backtest prima di usare soldi veri.
 
 ## Orizzonti di previsione
 
-| Orizzonte | Candele usate | Note |
-|---|---|---|
-| 10 s, 30 s | 5 secondi, costruite dai tick live | Sperimentale: Kronos è addestrato su candele da 1 minuto in su. Servono circa 4 minuti dall'avvio. |
-| 1, 5, 15 min | 1 minuto | Usato anche dal Checker (percorsi di 30 minuti). |
-| 30 min, 1 h | 5 minuti | |
+Una sola previsione Kronos-base per token, su candele da 15 minuti, 18 passi (4 ore più due passi di margine per leggere esattamente "4 ore da adesso" anche su una previsione di mezz'ora fa):
 
-Ogni previsione nasce da 24 futuri campionati da Kronos: la percentuale è la quota di campioni sopra il prezzo attuale, il cono sul grafico mostra il 50% e l'80% centrali.
+| Orizzonte | Passo letto | Grafico |
+|---|---|---|
+| 15 minuti | 1 | candele da 15 minuti |
+| 1 ora | 4 | candele da 1 ora, costruite dalle 15 minuti |
+| 4 ore | 16 | candele da 4 ore, costruite dalle 15 minuti |
+
+Ogni previsione nasce da 24 futuri campionati (96 nella conferma prima di un ingresso): la percentuale è la quota di campioni sopra il prezzo attuale, il cono sul grafico mostra il 50% e l'80% centrali e parte dal momento e dal prezzo in cui la previsione è stata calcolata. Kronos riceve aperture, massimi, minimi, chiusure, volume e importo delle candele della borsa; se l'ultima candela chiusa è ancora quella costruita dai tick, prima della previsione viene riletta dalla borsa.
 
 ## Avvio
 
@@ -39,11 +41,19 @@ cd frontend && npm install && npm run build && cd ..
 cd backend && ..\.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Apri http://127.0.0.1:8000. Al primo avvio vengono scaricati da Hugging Face i pesi di Kronos-mini (circa 20 MB).
+Apri http://127.0.0.1:8000. Al primo avvio vengono scaricati da Hugging Face i pesi di Kronos-base.
 
 Per sviluppare il frontend con ricarica automatica: `cd frontend && npm run dev` e apri http://127.0.0.1:5173 (le chiamate vanno al backend sulla porta 8000).
 
 Test: `cd backend && ..\.venv\Scripts\python -m pytest -q`.
+
+## Backtest dell'ingresso in rottura
+
+```bash
+cd backend && ..\.venv\Scripts\python -m tools.backtest_4h
+```
+
+Scarica lo storico da 15 minuti da Orderly, esegue Kronos a ritroso e scrive in `data/backtest/` un rapporto con: quanto l'ampiezza prevista da Kronos anticipa il movimento reale (contro la stima ingenua "quanto si è mosso nelle 4 ore prima"), la calibrazione della probabilità a 4 ore, le operazioni con le regole dell'Executor, gli stessi ingressi senza l'uscita in pari, tutte le rotture senza filtri Kronos e ingressi casuali, sempre con le stesse uscite. Default: Kronos-base, primi 10 token, 30 giorni, una previsione ogni 2 ore per token (`--days`, `--top`, `--every`, `--model`, `--lev`; `--help` per tutto). Con Kronos-base su CPU richiede molte ore e usa la stessa CPU del server: conviene lanciarlo a server fermo. Le previsioni restano in cache, quindi un'interruzione non fa perdere il lavoro fatto. Il punteggio di rischio del Checker non è replicato (ogni operazione usa una sola leva) e le uscite usano le previsioni programmate invece di una ogni 5 minuti.
 
 ## Configurazione
 
@@ -51,25 +61,31 @@ Tutto è modificabile con variabili d'ambiente (vedi `backend/app/config.py`):
 
 | Variabile | Default | Significato |
 |---|---|---|
-| Selettore "Modello" in alto | base | passa tra Kronos-mini (veloce) e Kronos-base (più preciso, circa 20 volte più lento su CPU) senza riavviare; con mini si analizzano i primi 12 token per capitalizzazione, con base tutti e 36; la scelta resta salvata in `data/model.json` |
-| `PP_KRONOS_MODEL` / `PP_KRONOS_TOKENIZER` | `NeoQuasar/Kronos-mini` / `NeoQuasar/Kronos-Tokenizer-2k` | `NeoQuasar/Kronos-small` con `Kronos-Tokenizer-base` è più accurato ma circa 3,5 volte più lento su CPU |
-| `PP_SAMPLES` | 24 | futuri campionati per previsione |
-| `PP_LOOKBACK` | 128 | candele passate date al modello |
-| (fasce di rischio) | 25% → 10%, 30% → 7%, 35% → 5%, 40% → 3% | margine per operazione come quota del capitale totale secondo il rischio aggiuntivo; oltre il 40% l'Executor non apre (`PP_RISK_ABOVE_40`, `PP_MAX_RISK`); la regola di liquidazione può ridurlo |
-| `PP_MARGIN_USDC` | 100 | margine proposto nel pannello ordini manuale |
-| `PP_LIQ_DISTANCE` | 0.5 | long: l'importo è calcolato (margine incrociato) perché la liquidazione di ogni posizione resti almeno al 50% dall'entrata; si aprono long finché la regola lo permette. Short: margine fisso se c'è collaterale libero |
-| `PP_MAX_POSITIONS` | 0 | limite fisso di posizioni (0 = nessuno, decide la regola di liquidazione) |
-| `PP_TP_PCT` / `PP_SL_PCT` | 5 / 2 | take profit e stop loss in % con leva |
-| `PP_MIN_CONF` | 0.70 | l'Executor apre solo se la probabilità a 4 ore supera il 70%, a prescindere dal rischio |
-| `PP_MIN_SCORE` / `PP_MAX_RISK` | 0 / 1 (spenti) | filtri opzionali su probabilità × (1 − rischio) e sul rischio aggiuntivo; il rischio oggi decide solo la leva |
-| `PP_ENTRY_ZONE` | 0.20 | fascia di ingresso: ultimo 20% del range delle 4 ore verso il minimo (long) o il massimo (short) |
-| `PP_MIN_CONF_8H` | 0.50 | la previsione a 8 ore serve solo a confermare il trend al rialzo (oltre il 50%); la soglia del 70% è sulle 4 ore |
-| `PP_ENTRY_TOL` | 0.002 | ingresso quando il prezzo è entro lo 0,2% dal punto più basso previsto da Kronos nelle prossime 4 ore; prima di entrare la previsione viene ricalcolata |
-| `PP_MAX_FORECAST_AGE` | 900 | età massima (s) della previsione a 4 ore per aprire |
+| `PP_BASE_TOKENS` | 0 (automatico) | token analizzati con Kronos-base, per capitalizzazione; 0 = quanti ne entrano in un ciclo di scansione al tempo misurato per previsione, meno le posizioni aperte (minimo `PP_BASE_TOKENS_MIN`, 6) |
+| `PP_BASE_LOOKBACK` | 128 | candele da 15 minuti di contesto date a Kronos-base (32 ore) |
+| `PP_SCAN_AGE` / `PP_POSITION_REFRESH` | 300 / 300 | ogni quanti secondi un token e una posizione aperta vengono riprevisti |
+| `PP_SAMPLES` / `PP_DECISION_SAMPLES` | 24 / 96 | futuri campionati per previsione: scansione e conferma prima dell'ingresso |
+| `PP_DECISION_MODEL` | vuoto | modello diverso per la conferma; vuoto = lo stesso Kronos-base |
+| (fasce di rischio) | 25% → 10%, 30% → 7%, 35% → 5%, 40% → 3% | margine per operazione come quota del capitale secondo il rischio aggiuntivo; oltre il 40% il 3%: il rischio non blocca mai un'apertura (`PP_RISK_ABOVE_40`; `PP_MAX_RISK=0.40` ripristina il blocco) |
+| `PP_RISK_CONF_FLOOR` | 0.70 | tra il 50% e il 70% di probabilità Kronos pesa sul rischio aggiuntivo come al 70%: un ingresso in rottura al 55% non viene bloccato né ridotto per la probabilità; sopra il 70% una probabilità più alta abbassa ancora il rischio |
+| `PP_RISK_VOLATILITY` | 0 | 1 = la volatilità a 15 minuti torna nel rischio aggiuntivo; era misurata contro lo stop a −2% che non esiste più e penalizzava proprio i token con movimento previsto ampio |
+| `PP_MAX_TOKEN_EXPOSURE` / `PP_MAX_TOTAL_EXPOSURE` | 0.5 / 1.5 | esposizione massima (nozionale sul capitale) per token e in totale: la leva riduce il margine bloccato, non moltiplica l'esposizione |
+| `PP_LIQ_DISTANCE` | 0.5 | long: l'importo è calcolato (margine incrociato) perché la liquidazione di ogni posizione resti almeno al 50% dall'entrata |
+| `PP_MAX_POSITIONS` | 0 | limite fisso di posizioni (0 = nessuno) |
+| `PP_MIN_CONF` | 0.50 | probabilità di rialzo a 4 ore che Kronos deve superare (non contrario al long), sulla previsione di scansione e su quella di conferma |
+| `PP_MIN_MOVE` | 0.015 | ampiezza prevista minima: media del movimento a 4 ore dei percorsi, in valore assoluto, dal prezzo della previsione |
+| `PP_ROOF_BARS` / `PP_BREAKOUT_BUFFER` / `PP_BREAKOUT_MAX_CHASE` | 4 / 0.001 / 0.01 | tetto = massimo delle ultime 4 candele da 15 minuti chiuse; ingresso sopra il tetto + 0,1%, non oltre il tetto + 1% |
+| `PP_BE_EXIT` / `PP_BE_EXIT_MAX_UP` | 1 / 0.5 | uscita in pari netto quando la previsione dà il rialzo sotto il 50% a 15 minuti, 1 ora e 4 ore (0 la disattiva) |
+| `PP_BTC_FILTER` | 0 | filtro BTC tolto; 1 = niente long se BTC è sceso a 4 o 24 ore oltre `PP_BTC_FILTER_4H` / `PP_BTC_FILTER_24H` (0 / 0) |
+| `PP_ANALYST_BLOCKS` | 0 | la pausa dell'Analyst non blocca le aperture (il suo rischio macro abbassa solo la fascia di margine); 1 la ripristina |
+| `PP_MAX_FORECAST_AGE` | 2700 | età massima (s) della previsione di scansione per avviare la conferma |
+| `PP_LOCK_PROFIT` / `PP_LOCK_ATR` | 2 / 1 | stop di protezione: profitto netto sul margine (%) e distanza in ATR a 15 minuti che lo attiva |
 | `PP_EXIT_MARGIN` / `PP_EXIT_CONFIRM` | 0.10 / 2 | scarto e conferme per chiudere sull'inversione della previsione |
-| `PP_USE_TP` | 0 | 1 riattiva il take profit fisso +5% con leva |
+| `PP_HOLD_LOSERS` | 1 | 1 = le posizioni in perdita non vengono mai chiuse dagli agenti |
+| `PP_TP_PCT` / `PP_SL_PCT`, `PP_USE_TP`, `PP_USE_SL` | 5 / 2, 0, 0 | take profit e stop loss fissi in % con leva, disattivati |
 | `PP_ANALYST_PAUSE` / `PP_ANALYST_CLOSE` | 55 / 70 | soglie di rischio dell'Analyst |
-| `PP_TAKER_FEE` / `PP_SLIPPAGE` | 0.0006 / 0.0002 | costi usati nella simulazione |
+| `PP_TAKER_FEE` / `PP_SLIPPAGE` | 0.0006 / 0.0002 | costi usati nella simulazione e nel backtest |
+| `PP_TOP_P` | 0.9 | campionamento di Kronos; se la copertura 10-90% nel report resta sotto l'80%, il cono è troppo stretto e conviene alzarlo |
 
 ## Struttura
 
@@ -79,6 +95,7 @@ backend/app/
   predict/engine.py     Kronos con tutti i percorsi campionati (kronos_model/ è il codice originale, MIT)
   predict/probability.py  probabilità per orizzonte e TP/SL/liquidazione
   predict/service.py    pianificazione delle inferenze e verifica a scadenza
+backend/tools/backtest_4h.py  backtest dell'ingresso in rottura e delle uscite
   agents/               checker, indicators, analyst, history_events, executor, controller
   main.py               API REST + WebSocket
 frontend/src/
@@ -88,7 +105,7 @@ frontend/src/
 
 ## Limiti noti
 
-- Registrazione del conto, chiave delegata, ordini e TP/SL su Raydium Perps sono scritti seguendo l'SDK ufficiale di Orderly ma **non sono ancora stati eseguiti contro il mercato reale**. Primo passo consigliato: un ordine manuale della dimensione minima, controllando su perps.raydium.io che TP e SL compaiano, prima di accendere il trading automatico reale.
-- Con commissioni taker dello 0,06% per lato più slippage, a 20x un'operazione chiusa in take profit rende circa +2,6% del margine e una chiusa in stop loss circa −4,9%: servono più vincite che perdite per andare in pari. Il Controller mostra i numeri reali.
-- La libreria dei pattern storici copre le ultime 1000 candele da 1 minuto per token (circa 16 ore).
-- Posizioni simulate aperte e saldo simulato si azzerano al riavvio del backend; lo storico delle operazioni chiuse resta in `data/predictor.sqlite3`.
+- Registrazione del conto, chiave delegata e ordini su Raydium Perps sono scritti seguendo l'SDK ufficiale di Orderly ma **non sono ancora stati eseguiti contro il mercato reale**. Primo passo consigliato: un ordine manuale della dimensione minima prima di accendere il trading automatico reale.
+- Con commissioni taker dello 0,06% per lato più slippage, un'operazione costa lo 0,16% del nozionale andata e ritorno: il 3,2% del margine a 20x.
+- L'ingresso in rottura, l'uscita in pari, il punteggio di rischio del Checker e le altre regole a 4 ore non sono ancora stati verificati su dati storici: il registro dei segnali e il backtest servono a questo.
+- La libreria dei pattern storici copre le candele da 15 minuti in memoria (fino a circa un mese).

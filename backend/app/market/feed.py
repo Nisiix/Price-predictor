@@ -149,11 +149,11 @@ class MarketFeed:
             self.store.update_tick(m.symbol, price, now)
         self.last_tick_ts = now
 
-    async def load_history(self, symbol: str, tf: str, before: int | None = None) -> int:
-        """Fetch up to 1000 closed bars ending at `before` (default: now). Returns how many arrived."""
+    async def load_history(self, symbol: str, tf: str, before: int | None = None, n: int = 1000) -> int:
+        """Fetch up to `n` (max 1000) closed bars ending at `before` (default: now). Returns how many arrived."""
         res = {"1m": "1m", "5m": "5m", "15m": "15m"}[tf]
         to = int(before or time.time())
-        span = TIMEFRAMES[tf] * 1000
+        span = TIMEFRAMES[tf] * n
         d = await self._get(
             f"{settings.orderly_api}/v1/tv/kline_history", symbol=symbol, resolution=res, **{"from": to - span, "to": to}
         )
@@ -180,6 +180,22 @@ class MarketFeed:
                 await asyncio.sleep(0.8 if n >= 0 else 6)
             if n == 0:
                 return
+
+    async def refresh_recent(self, symbol: str, tf: str, n: int = 8) -> None:
+        """Right before a forecast: if one of the last closed candles was built from the 1-second mark price
+        (volume 0, narrower high/low) because the periodic history refresh has not reached it yet, replace the
+        last `n` candles with the exchange's. One small request, only when needed."""
+        if tf not in HISTORY_TFS:
+            return
+        sec = TIMEFRAMES[tf]
+        bars = self.store.get(symbol, tf, 4)
+        closed = bars[bars[:, 0] + sec <= time.time()] if len(bars) else bars
+        if not len(closed) or (closed[-3:, 5] > 0).all():
+            return
+        try:
+            await self.load_history(symbol, tf, n=n)
+        except Exception as exc:  # the forecast goes on with the tick-built candle
+            log.debug("recent history %s %s failed: %s", symbol, tf, exc)
 
     def history_ready(self, symbol: str) -> bool:
         return f"{symbol}:1m" in self._history_ready and f"{symbol}:5m" in self._history_ready
