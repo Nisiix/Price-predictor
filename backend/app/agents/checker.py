@@ -161,7 +161,9 @@ class Checker:
             "macro_analyst": self.macro_risk / 100,
         }
         weights = {"kronos_avverso": 0.30, "indicatori_contrari": 0.20, "pattern_storici": 0.20,
-                   "volatilita": 0.15, "macro_analyst": 0.15}
+                   # volatility is measured against the old -2% leveraged stop, which no longer exists: it would penalise
+                   # exactly the tokens with the large predicted move the breakout needs, so it is off by default
+                   "volatilita": 0.15 if settings.risk_volatility else 0.0, "macro_analyst": 0.15}
         extra_risk = float(sum(risk_parts[k] * w for k, w in weights.items()))
         score = conf * (1 - extra_risk)
         lev = self._leverage(extra_risk, m.max_leverage)

@@ -632,3 +632,12 @@ def test_break_even_exit_needs_all_three_horizons_bearish():
     be = p.entry * 1.002
     feed.set(be)
     assert ex._check(p, be, 0.5) is None and not p.bearish_all
+
+
+def test_volatility_does_not_raise_the_risk_by_default(monkeypatch):
+    highs = [99.6, 100.0, 99.8, 99.7]
+    r = _breakout_checker(100.2, highs, p_up=0.55).evaluate("PERP_SOL_USDC")
+    assert r["risk_parts"]["volatilita"] > 0.5  # measured and shown...
+    monkeypatch.setattr(settings, "risk_volatility", True)
+    rv = _breakout_checker(100.2, highs, p_up=0.55).evaluate("PERP_SOL_USDC")
+    assert rv["extra_risk"] == pytest.approx(r["extra_risk"] + 0.15 * r["risk_parts"]["volatilita"])  # ...counted only if on

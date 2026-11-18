@@ -16,8 +16,9 @@ What it measures
      breakout. Exits as live: protective stop at +2% NET on the margin armed 1 ATR above it, close on a confirmed
      4h reversal only when not at a loss, break-even exit (net break-even or better while the forecast is bearish at
      15 min, 1 h and 4 h), losing positions never closed (liquidation only, cross margin at 50% from the entry).
-  4. The same entries WITHOUT the break-even exit, every breakout WITHOUT the Kronos filters, and RANDOM entries,
-     all with the same exits: what the forecast and the break-even exit each add.
+  4. The same entries WITHOUT the break-even exit, the same rules WITHOUT the BTC filter (and the breakouts it
+     blocked), every breakout WITHOUT the Kronos filters, and RANDOM entries, all with the same exits: what the
+     forecast, the BTC filter and the break-even exit each add.
 
 Not replicated: the Checker's extra-risk score (indicators, historical analogs, Analyst macro risk), so every trade
 uses one leverage (--lev) and the result is reported per trade on the margin, not on a sized account. Exit checks
@@ -362,7 +363,7 @@ def main() -> None:
         fcs[sym] = forecast_paths(engine, sym, b, idx, args.lookback, args.samples, args.batch, cache_dir, tag)
 
     rng = np.random.default_rng(args.seed)
-    strat, no_be, plain, rand = [], [], [], []
+    strat, no_be, plain, rand, no_btc = [], [], [], [], []
     btc = data.get("PERP_BTC_USDC")
     for sym in syms:
         b, fc = data[sym], fcs[sym]
@@ -370,6 +371,7 @@ def main() -> None:
         strat += tr
         no_be += run_rules(sym, b, fc, btc, start[sym], args.lev, engine, args, cache_dir, be_exit=False)
         plain += run_rules(sym, b, fc, btc, start[sym], args.lev, engine, args, cache_dir, kronos=False)
+        no_btc += run_rules(sym, b, fc, None, start[sym], args.lev, engine, args, cache_dir)
         rand += random_trades(sym, b, fc, start[sym], args.lev, max(len(tr), 5), rng)
     elapsed = time.time() - t0
 
@@ -389,6 +391,9 @@ def main() -> None:
     lines += ["", "## Operazioni (stesse uscite, ROE netto sul margine)", ""]
     lines += trade_table("Regole dell'Executor: rottura + ampiezza + Kronos + conferma, con uscita in pari", strat)
     lines += trade_table("Stessi ingressi senza uscita in pari", no_be)
+    lines += trade_table("Stesse regole senza il filtro BTC", no_btc)
+    lines += trade_table("Di queste, solo quelle che il filtro BTC avrebbe bloccato",
+                         [t for t in no_btc if not btc_ok(btc, t["t"])])
     lines += trade_table("Tutte le rotture, senza filtri Kronos", plain)
     lines += trade_table("Ingressi casuali", rand)
     lines += ["## Confronti", ""]
