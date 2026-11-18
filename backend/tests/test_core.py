@@ -329,7 +329,7 @@ def test_risk_tiers_share_of_capital():
 
     assert E.risk_share(0.20) == 0.10 and E.risk_share(0.25) == 0.10
     assert E.risk_share(0.28) == 0.07 and E.risk_share(0.33) == 0.05
-    assert E.risk_share(0.40) == 0.03 and E.risk_share(0.55) == 0.0  # above 40%: no opening
+    assert E.risk_share(0.40) == 0.03 and E.risk_share(0.55) == 0.03  # above 40%: smallest tier, no block
     feed, ctl, ex = make()
     p = open_long(ex, lev=10)  # risk 0.2 -> 10% of 1000 = 100 USDC, but 1000 notional is above the 50% token cap
     assert p.margin == pytest.approx(50.0, rel=0.01)
@@ -558,7 +558,9 @@ def test_breakout_entry_only_above_the_last_hours_roof():
     r = _breakout_checker(100.2, highs).evaluate("PERP_SOL_USDC")
     assert r["breakout"] and r["eligible"], r["reasons"]
     assert r["amplitude"] == pytest.approx(0.03)
-    r = _breakout_checker(100.8, highs).evaluate("PERP_SOL_USDC")  # 0.8% above the roof: too late
+    r = _breakout_checker(100.8, highs).evaluate("PERP_SOL_USDC")  # 0.8% above the roof: still inside the 1% band
+    assert r["eligible"], r["reasons"]
+    r = _breakout_checker(101.2, highs).evaluate("PERP_SOL_USDC")  # 1.2% above the roof: too late
     assert not r["eligible"] and any("troppo tardi" in x for x in r["reasons"])
 
 
@@ -641,3 +643,13 @@ def test_volatility_does_not_raise_the_risk_by_default(monkeypatch):
     monkeypatch.setattr(settings, "risk_volatility", True)
     rv = _breakout_checker(100.2, highs, p_up=0.55).evaluate("PERP_SOL_USDC")
     assert rv["extra_risk"] == pytest.approx(r["extra_risk"] + 0.15 * r["risk_parts"]["volatilita"])  # ...counted only if on
+
+
+def test_risk_btc_and_analyst_never_block_by_default():
+    highs = [99.6, 100.0, 99.8, 99.7]
+    ch = _breakout_checker(100.2, highs)
+    ch.macro_risk = 100.0
+    ch.btc = {"ok": False, "chg_4h": -0.03, "chg_24h": -0.05}
+    ch.pause(600, "test")
+    r = ch.evaluate("PERP_SOL_USDC")
+    assert r["eligible"] and not ch.paused, r["reasons"]  # only the Kronos forecast and the breakout decide

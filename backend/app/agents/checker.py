@@ -52,7 +52,7 @@ class Checker:
 
     @property
     def paused(self) -> bool:
-        return time.time() < self.paused_until
+        return settings.analyst_blocks and time.time() < self.paused_until
 
     def _refresh_library(self) -> None:
         if time.time() - self._library_ts < 60:
@@ -173,7 +173,7 @@ class Checker:
             reasons.append(f"Kronos non favorevole al rialzo a 4 ore ({p_up * 100:.0f}%, serve oltre il {settings.min_confidence * 100:.0f}%)")
         if amplitude < settings.min_move:
             reasons.append(f"movimento previsto a 4 ore {amplitude * 100:.1f}%, sotto la soglia di {settings.min_move * 100:g}%")
-        if extra_risk > settings.max_risk:
+        if settings.max_risk and extra_risk > settings.max_risk:
             reasons.append(f"rischio aggiuntivo oltre il {settings.max_risk * 100:.0f}%")
         if score < settings.min_signal_score:
             reasons.append("punteggio sotto soglia")
@@ -184,7 +184,7 @@ class Checker:
         if time.time() - c4["ts"] > settings.max_forecast_age_s:
             reasons.append("previsione a 4 ore troppo vecchia")
         btc = self.btc
-        if side > 0 and not btc["ok"]:
+        if settings.btc_filter and side > 0 and not btc["ok"]:
             reasons.append(f"BTC in calo (4 ore {btc['chg_4h'] * 100:+.1f}%, 24 ore {btc['chg_24h'] * 100:+.1f}%)")
         if settings.longs_only and side < 0:
             reasons.insert(0, "previsione al ribasso: l'Executor apre solo long")

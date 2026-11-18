@@ -241,7 +241,7 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
         </div>
       )}
       <p className="note" style={{ marginTop: 8 }}>
-        I token con una posizione aperta non vengono analizzati finché la posizione resta aperta. L'Executor apre solo long, in rottura: quando Kronos prevede un movimento ampio nelle prossime 4 ore (in media oltre l'1,5%) e non è contrario al rialzo (oltre il 50%), BTC non è in calo a 4 e 24 ore, e il prezzo supera dello 0,1% il massimo dell'ultima ora, cioè il movimento previsto è cominciato verso l'alto; se il prezzo scende non apre nulla, e oltre lo 0,5% sopra il tetto è troppo tardi. Prima di entrare ricalcola la previsione con 96 campioni ed entra solo se conferma. Ha la precedenza il movimento previsto più ampio; il rischio decide il margine, con al massimo il 50% del capitale esposto per token e il 150% in totale. Seleziona una riga per l'analisi completa.
+        I token con una posizione aperta non vengono analizzati finché la posizione resta aperta. L'Executor apre solo long, in rottura: quando Kronos prevede un movimento ampio nelle prossime 4 ore (in media oltre l'1,5%) e non è contrario al rialzo (oltre il 50%) e il prezzo supera dello 0,1% il massimo dell'ultima ora, cioè il movimento previsto è cominciato verso l'alto; se il prezzo scende non apre nulla, e oltre l'1% sopra il tetto è troppo tardi. Prima di entrare ricalcola la previsione con 96 campioni ed entra solo se conferma. Ha la precedenza il movimento previsto più ampio; il rischio non blocca mai, decide solo il margine (oltre il 40% il 3% del capitale), con al massimo il 50% del capitale esposto per token e il 150% in totale. Seleziona una riga per l'analisi completa.
       </p>
     </div>
   );
@@ -262,7 +262,7 @@ export function Verdict({ snap }: { snap: Snapshot | undefined }) {
   const an = c.analogs;
   const labels: Record<string, string> = {
     kronos_avverso: "Kronos: direzione opposta", indicatori_contrari: "Indicatori contrari", pattern_storici: "Pattern storici contrari",
-    volatilita: "Volatilità vs stop", macro_analyst: "Rischio macro (Analyst)",
+    volatilita: "Volatilità (non conteggiata)", macro_analyst: "Rischio macro (Analyst)",
   };
   return (
     <div className="panel">

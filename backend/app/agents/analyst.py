@@ -6,9 +6,9 @@ category carries a severity calibrated on how hard BTC and altcoins fell
 after the historical events of that type. Recent, severe, negative headlines
 plus sudden BTC moves and extreme sentiment form a 0-100 risk score.
 
-Above `analyst_pause_threshold` the Checker stops opening new trades; above
+Above `analyst_pause_threshold` the Checker stops opening new trades only if PP_ANALYST_BLOCKS=1 (off: user rule); above
 `analyst_close_threshold` (or on a critical headline / BTC shock) the Analyst
-orders the Executor to close every open position regardless of PnL.
+orders the Executor to close every open position that is not at a loss (losers are kept, user rule).
 """
 from __future__ import annotations
 

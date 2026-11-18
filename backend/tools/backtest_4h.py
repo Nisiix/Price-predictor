@@ -10,15 +10,15 @@ What it measures
      last 4 hours' move". If Kronos does not beat the naive guess, the amplitude filter adds nothing.
   2. Probability calibration: the Kronos 4h long probability against the real 4h return, by bucket.
   3. The live rules: predicted amplitude >= PP_MIN_MOVE (1.5%), Kronos not against the long (> 50% from the fill
-     price), BTC not falling over 4 h / 24 h, entry when a 15m candle trades above roof x (1 + 0.1%) while the
+     price), entry when a 15m candle trades above roof x (1 + 0.1%) while the
      forecast is at most 45 minutes old, filled at that level (or at the open if it gapped above, skipped if more
-     than 0.5% above the roof), a fresh confirmation forecast with more samples on the candles closed before the
+     than 1% above the roof), a fresh confirmation forecast with more samples on the candles closed before the
      breakout. Exits as live: protective stop at +2% NET on the margin armed 1 ATR above it, close on a confirmed
      4h reversal only when not at a loss, break-even exit (net break-even or better while the forecast is bearish at
      15 min, 1 h and 4 h), losing positions never closed (liquidation only, cross margin at 50% from the entry).
-  4. The same entries WITHOUT the break-even exit, the same rules WITHOUT the BTC filter (and the breakouts it
-     blocked), every breakout WITHOUT the Kronos filters, and RANDOM entries, all with the same exits: what the
-     forecast, the BTC filter and the break-even exit each add.
+  4. The same entries WITHOUT the break-even exit, those taken while BTC was falling (the removed BTC filter would
+     have blocked them), every breakout WITHOUT the Kronos filters, and RANDOM entries, all with the same exits:
+     what the forecast and the break-even exit each add.
 
 Not replicated: the Checker's extra-risk score (indicators, historical analogs, Analyst macro risk), so every trade
 uses one leverage (--lev) and the result is reported per trade on the margin, not on a sized account. Exit checks
@@ -198,7 +198,7 @@ def run_rules(sym, bars, fc, btc, start_i, lev, engine, args, cache_dir, kronos=
     filter; the exits still use the forecasts)."""
     trades, busy_until = [], -1
     for j, i, el, roof, fill in breakouts(bars, fc, start_i, args.every):
-        if j <= busy_until or not btc_ok(btc, bars[j, 0]):
+        if j <= busy_until or (settings.btc_filter and not btc_ok(btc, bars[j, 0])):
             continue
         f, k4 = fc[i], STEP4 - 1 + el  # 4 hours ahead of the breakout on that older forecast
         if kronos:
@@ -363,7 +363,7 @@ def main() -> None:
         fcs[sym] = forecast_paths(engine, sym, b, idx, args.lookback, args.samples, args.batch, cache_dir, tag)
 
     rng = np.random.default_rng(args.seed)
-    strat, no_be, plain, rand, no_btc = [], [], [], [], []
+    strat, no_be, plain, rand = [], [], [], []
     btc = data.get("PERP_BTC_USDC")
     for sym in syms:
         b, fc = data[sym], fcs[sym]
@@ -371,7 +371,6 @@ def main() -> None:
         strat += tr
         no_be += run_rules(sym, b, fc, btc, start[sym], args.lev, engine, args, cache_dir, be_exit=False)
         plain += run_rules(sym, b, fc, btc, start[sym], args.lev, engine, args, cache_dir, kronos=False)
-        no_btc += run_rules(sym, b, fc, None, start[sym], args.lev, engine, args, cache_dir)
         rand += random_trades(sym, b, fc, start[sym], args.lev, max(len(tr), 5), rng)
     elapsed = time.time() - t0
 
@@ -381,8 +380,7 @@ def main() -> None:
              f"{len(syms)} token, leva {args.lev:g}x, costi andata e ritorno {COSTS * 100:.2f}% del nozionale. "
              f"Ampiezza minima {settings.min_move * 100:g}%, Kronos oltre il {settings.min_confidence * 100:.0f}%, tetto = "
              f"massimo delle ultime {settings.roof_bars} candele da 15 minuti, ingresso oltre +{settings.breakout_buffer * 100:g}%, "
-             f"non oltre +{settings.breakout_max_chase * 100:g}%. Filtro BTC: -{settings.btc_filter_4h * 100:g}% a 4 ore, "
-             f"-{settings.btc_filter_24h * 100:g}% a 24 ore. Previsioni e regole in {elapsed / 60:.1f} minuti."
+             f"non oltre +{settings.breakout_max_chase * 100:g}%. Filtro BTC {'attivo' if settings.btc_filter else 'tolto'}. Previsioni e regole in {elapsed / 60:.1f} minuti."
              + (" MODALITÀ OFFLINE: percorsi bootstrap, non Kronos." if args.offline else ""), "",
              "## Kronos riconosce i movimenti ampi?", ""]
     lines += amplitude_table(data, fcs, start)
@@ -391,9 +389,8 @@ def main() -> None:
     lines += ["", "## Operazioni (stesse uscite, ROE netto sul margine)", ""]
     lines += trade_table("Regole dell'Executor: rottura + ampiezza + Kronos + conferma, con uscita in pari", strat)
     lines += trade_table("Stessi ingressi senza uscita in pari", no_be)
-    lines += trade_table("Stesse regole senza il filtro BTC", no_btc)
-    lines += trade_table("Di queste, solo quelle che il filtro BTC avrebbe bloccato",
-                         [t for t in no_btc if not btc_ok(btc, t["t"])])
+    lines += trade_table("Di queste, quelle con BTC in calo a 4 o 24 ore (il vecchio filtro BTC le avrebbe bloccate)",
+                         [t for t in strat if not btc_ok(btc, t["t"])])
     lines += trade_table("Tutte le rotture, senza filtri Kronos", plain)
     lines += trade_table("Ingressi casuali", rand)
     lines += ["## Confronti", ""]

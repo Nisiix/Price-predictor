@@ -67,7 +67,8 @@ class Settings:
     # user rule: margin per trade as a share of total capital, by extra risk (risk <= threshold -> share);
     # above the last threshold the smallest share is used. The liquidation sizing can still lower it.
     risk_tiers: tuple[tuple[float, float], ...] = ((0.25, 0.10), (0.30, 0.07), (0.35, 0.05), (0.40, 0.03))
-    risk_tier_above: float = _f("PP_RISK_ABOVE_40", 0.0)  # 0 = do not open (user rule)
+    # above the last tier: the smallest share (user rule, 18 Nov: the risk sizes the trade, it never blocks it)
+    risk_tier_above: float = _f("PP_RISK_ABOVE_40", 0.03)
     # cross-margin sizing (user rule): every position's liquidation price must stay at least this far from its
     # entry (0.5 = a long liquidates only below half its entry price, a short only above 1.5x)
     liq_min_distance: float = _f("PP_LIQ_DISTANCE", 0.5)
@@ -87,7 +88,9 @@ class Settings:
     # user rule (breakout entry): Kronos must not be against the long, its 4h probability ABOVE this (50%); the
     # direction comes from the breakout itself, Kronos is asked for the size of the move
     min_confidence: float = _f("PP_MIN_CONF", 0.50)
-    max_risk: float = _f("PP_MAX_RISK", 0.40)  # user rule: no opening above 40% extra risk
+    # user rule (18 Nov): "the Kronos forecasts count" - the extra risk only decides the margin tier, it does not block
+    # an opening any more; 0 = no ceiling (PP_MAX_RISK=0.40 restores the old block above 40%)
+    max_risk: float = _f("PP_MAX_RISK", 0.0)
     # user rule (18 Nov): no extra risk for a Kronos probability between 50% and this value; below it the Kronos part of
     # the extra risk is the one at this value, so a 55% breakout is not sized or blocked differently from a 70% one
     risk_conf_floor: float = _f("PP_RISK_CONF_FLOOR", 0.70)
@@ -105,9 +108,10 @@ class Settings:
     min_move: float = _f("PP_MIN_MOVE", 0.015)
     roof_bars: int = _i("PP_ROOF_BARS", 4)
     breakout_buffer: float = _f("PP_BREAKOUT_BUFFER", 0.001)
-    breakout_max_chase: float = _f("PP_BREAKOUT_MAX_CHASE", 0.005)
-    # market filter: no long while BTC is falling over 4 h or 24 h (the altcoins follow it); a long is allowed only
-    # if BTC's change is above -threshold (0 = any fall blocks)
+    breakout_max_chase: float = _f("PP_BREAKOUT_MAX_CHASE", 0.01)  # user: 1% (0.5% was often passed during the confirmation)
+    # market filter on BTC: removed by the user (18 Nov). PP_BTC_FILTER=1 restores it: no long while BTC is falling
+    # over 4 h or 24 h by more than the thresholds below (0 = any fall blocks)
+    btc_filter: bool = os.getenv("PP_BTC_FILTER", "0") == "1"
     btc_filter_4h: float = _f("PP_BTC_FILTER_4H", 0.0)
     btc_filter_24h: float = _f("PP_BTC_FILTER_24H", 0.0)
     exit_margin: float = _f("PP_EXIT_MARGIN", 0.10)  # reversal only if the opposite direction reaches 50% + margin
@@ -130,6 +134,9 @@ class Settings:
     be_exit_max_up: float = _f("PP_BE_EXIT_MAX_UP", 0.5)
     analyst_close_threshold: float = _f("PP_ANALYST_CLOSE", 70.0)
     analyst_pause_threshold: float = _f("PP_ANALYST_PAUSE", 55.0)
+    # user rule (18 Nov): the Analyst's pause no longer blocks new openings (its macro risk still lowers the margin
+    # tier); PP_ANALYST_BLOCKS=1 restores the pause
+    analyst_blocks: bool = os.getenv("PP_ANALYST_BLOCKS", "0") == "1"
     news_poll_s: int = _i("PP_NEWS_POLL_S", 120)
 
     db_path: Path = field(default_factory=lambda: DATA_DIR / "predictor.sqlite3")
