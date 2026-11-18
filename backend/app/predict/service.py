@@ -24,7 +24,7 @@ MODELS = {
     "base": ("NeoQuasar/Kronos-base", "NeoQuasar/Kronos-Tokenizer-base", 512, 6.0),  # ~20x slower on CPU
 }
 # user rule: how many tokens (by market cap) each model analyses; None = the whole universe
-MODEL_UNIVERSE = {"mini": 12, "base": settings.base_tokens}
+MODEL_UNIVERSE = {"mini": 12, "base": settings.base_tokens or None}  # base, 0: automatic (auto_tokens)
 MODEL_FILE = DATA_DIR / "model.json"
 
 
@@ -45,6 +45,17 @@ from .engine import KronosEngine, SeriesInput, monte_carlo_paths
 from .probability import best_trade, fan, horizon_index, horizon_stats
 
 log = logging.getLogger("predict")
+
+
+def _volumes(v: np.ndarray) -> np.ndarray:
+    """Volumes for Kronos. Candles still built from live ticks (not yet replaced by the exchange's) carry volume 0:
+    they get the average volume of the last 20 exchange candles, so a missing value does not read as a dead market."""
+    v = np.nan_to_num(np.asarray(v, dtype=float), nan=0.0)
+    known = v[v > 0]
+    if not len(known):
+        return v
+    fill = float(known[-20:].mean())
+    return np.where(v > 0, v, fill)
 
 MIN_BARS = {"5s": 48, "1m": 64, "5m": 64, "15m": 64}
 MAX_AGE = {"5s": 5.0, "1m": 30.0, "5m": 120.0, "15m": 300.0}  # refresh interval for the focus token
@@ -70,10 +81,14 @@ class PredictionService:
         self.calib = Calibration()
         self.busy_with: str | None = None
         self.inferences = 0
+        self.scan_latency: float | None = None  # moving average of one scan forecast (s)
+        self._auto_n: int | None = None
+        self._auto_ts = 0.0
 
     # ------------------------------------------------------------------ core
-    def _run_tf(self, sym: str, tf: str, engine: KronosEngine | None = None) -> dict | None:
+    def _run_tf(self, sym: str, tf: str, engine: KronosEngine | None = None, n_samples: int | None = None) -> dict | None:
         engine = engine or self.engine
+        n_samples = n_samples or settings.n_samples
         sec = TIMEFRAMES[tf]
         lookback = settings.base_lookback if engine.model_name.endswith("Kronos-base") else settings.lookback
         bars = self.feed.store.get(sym, tf, lookback + 1)
@@ -86,17 +101,18 @@ class PredictionService:
         ts = pd.to_datetime(bars[:, 0], unit="s")
         fut = pd.to_datetime(bars[-1, 0] + sec * np.arange(1, pred_len + 1), unit="s")
         ohlc = bars[:, 1:5]
+        volume = _volumes(bars[:, 5])
         last = float(self.feed.store.last_price(sym) or ohlc[-1, 3])
         source = "kronos"
         paths = None
         if engine.ready:
             paths = engine.sample_paths(
-                [SeriesInput(ohlc, ts, fut)], pred_len, settings.n_samples, settings.temperature, settings.top_p
+                [SeriesInput(ohlc, ts, fut, volume)], pred_len, n_samples, settings.temperature, settings.top_p
             )[0]
             if paths is None:
                 source = "flat"
         if paths is None:
-            paths = monte_carlo_paths(ohlc, pred_len, settings.n_samples)
+            paths = monte_carlo_paths(ohlc, pred_len, n_samples)
             source = source if source == "flat" else "montecarlo"
         # Re-anchor the sampled cloud on the live price (the model forecasts
         # from the last closed bar, the live tick may already have moved).
@@ -121,10 +137,29 @@ class PredictionService:
             "trade": trade,
         }
 
+    def auto_tokens(self, universe: int) -> int:
+        """Kronos-base, automatic: how many tokens one scan cycle can refresh at the measured time per forecast.
+        85% of the cycle goes to the scan; the open positions' forecasts and the focused token come out of it.
+        Re-evaluated at most every 15 minutes, so the list does not flicker."""
+        now = time.time()
+        if self._auto_n is not None and now - self._auto_ts < 900:
+            return self._auto_n
+        lat = self.scan_latency or 22.0  # before the first measurements: ~22 s (128 bars, 18 steps, estimate)
+        budget = 0.85 * settings.scan_age_s - lat * (len(self.priority) + 0.5)
+        n = int(max(settings.base_tokens_min, min(universe, budget // lat)))
+        if self._auto_n is None or abs(n - self._auto_n) >= 2:
+            self._auto_n = n
+        # before the first measured forecasts, look again in a minute
+        self._auto_ts = now if self.scan_latency is not None else now - 840
+        return self._auto_n
+
     def active_symbols(self) -> list[str]:
-        """Tokens analysed with the current model: the first N by market cap (mini: 12, base: all)."""
+        """Tokens analysed with the current model: the first N by market cap (mini: 12; base: PP_BASE_TOKENS, or
+        automatic from the measured speed when it is 0)."""
         ranked = sorted(self.feed.markets.values(), key=lambda m: m.rank)
         n = MODEL_UNIVERSE.get(self.model_key)
+        if self.model_key == "base" and not n and ranked:
+            n = self.auto_tokens(len(ranked))
         return [m.symbol for m in (ranked[:n] if n else ranked)]
 
     @property
@@ -151,21 +186,27 @@ class PredictionService:
         finally:
             self.switching = None
 
-    def run_decision(self, sym: str) -> dict | None:
-        """4h/8h forecast with the large model (falls back to the scanning model while it loads)."""
-        if self.decider is None or not self.decider.ready:
-            return self._run_tf(sym, "15m")
-        res = self._run_tf(sym, "15m", self.decider)
+    def run_decision(self, sym: str, n_samples: int | None = None) -> dict | None:
+        """Fresh 4h forecast for a decision, with the decision model when one is configured and loaded (else the
+        scanning model) and `decision_samples` sampled futures. The result is RETURNED to the caller and also cached,
+        both as the decision forecast and as the token's latest forecast: before, without a decision model, it was
+        computed and then thrown away, and the entry was decided on the older cached forecast."""
+        engine = self.decider if self.decider is not None and self.decider.ready else None
+        res = self._run_tf(sym, "15m", engine, n_samples or settings.decision_samples)
         if res:
-            self.cache[(sym, "15m:base")] = res
+            res["decision"] = True
+            self.cache[(sym, "15m:decision")] = res
+            self.cache[(sym, "15m")] = res  # newest forecast of the token: token list, exits and Checker use it too
         return res
 
     def decision_cache(self, sym: str, max_age: float = 900.0) -> dict | None:
-        """Freshest 4h forecast for decisions: the large model's when recent enough, else the scanner's."""
-        big = self.cache.get((sym, "15m:base"))
-        if big and time.time() - big["ts"] <= max_age:
+        """Freshest 4h forecast for decisions: the latest decision forecast when recent enough and not older than
+        the scan, else the scanner's."""
+        big = self.cache.get((sym, "15m:decision"))
+        scan = self.cache.get((sym, "15m"))
+        if big and time.time() - big["ts"] <= max_age and (scan is None or big["ts"] >= scan["ts"]):
             return big
-        return self.cache.get((sym, "15m"))
+        return scan
 
     def _job(self) -> tuple[str, str] | None:
         now = time.time()
@@ -180,10 +221,9 @@ class PredictionService:
                 if stale(sym, tf, MAX_AGE[tf] * min(self.factor, 2.0)) and self.feed.store.count(sym, tf) >= MIN_BARS[tf]:
                     return sym, tf
         for sym in list(self.priority):
-            # open positions: keep the 4h forecast fresh for the exits, with the large model when loaded
-            key = "15m:base" if self.decider is not None and self.decider.ready else "15m"
-            if stale(sym, key, 180.0) and self.feed.store.count(sym, "15m") >= MIN_BARS["15m"]:
-                return sym, key
+            # open positions: the 4h forecast for the exits, on the same 5-minute cycle as the scan
+            if stale(sym, "15m", settings.position_refresh_s) and self.feed.store.count(sym, "15m") >= MIN_BARS["15m"]:
+                return sym, "15m:pos"
         # the same forecast serves the token list, the Checker and the Executor: scan the stalest token
         for tf in tfs:
             job = self._scan(tf, settings.scan_age_s, "board", stale)
@@ -223,12 +263,19 @@ class PredictionService:
             sym, tf = job
             self.busy_with = f"{sym}:{tf}"
             try:
-                if tf == "15m:base":
-                    res = await asyncio.to_thread(self.run_decision, sym)
+                base_tf = tf.split(":")[0]
+                await self.feed.refresh_recent(sym, base_tf)  # last closed candles from the exchange, not from ticks
+                if tf == "15m:pos":
+                    # open position: the decision model when loaded, the usual number of samples
+                    engine = self.decider if self.decider is not None and self.decider.ready else None
+                    res = await asyncio.to_thread(self._run_tf, sym, base_tf, engine)
                 else:
                     res = await asyncio.to_thread(self._run_tf, sym, tf)
-                    if res:
-                        self.cache[(sym, tf)] = res
+                    if res and res["source"] == "kronos":
+                        lat = res["latency"]
+                        self.scan_latency = lat if self.scan_latency is None else 0.8 * self.scan_latency + 0.2 * lat
+                if res:
+                    self.cache[(sym, base_tf)] = res
                 if res:
                     self.calib.register(res)
             except Exception:
@@ -282,8 +329,14 @@ class PredictionService:
         for tf in sorted({tf for _, tf, _ in HORIZONS.values()}):
             c = self.cache.get((sym, tf))
             if c:
-                res["fans"][tf] = {"t": c["future_t"], **c["fan"], "anchor": c["last"], "bar_t": c["bar_t"],
-                                   "source": c["source"], "age": time.time() - c["ts"]}
+                # the cone goes exactly to 4 hours from now (the farthest horizon); the 2 slack steps are hidden
+                L = c["paths"].shape[1]
+                i4 = horizon_index(c["bar_t"], TIMEFRAMES[tf], HORIZONS["4h"][2], L, time.time())
+                end = L if i4 is None else i4 + 1
+                fan_ = {k: v[:end] for k, v in c["fan"].items()}
+                res["fans"][tf] = {"t": c["future_t"][:end], **fan_, "anchor": c["last"], "bar_t": c["bar_t"],
+                                   "ts": c["ts"], "tf_seconds": TIMEFRAMES[tf], "source": c["source"],
+                                   "age": time.time() - c["ts"]}
                 if tf == "15m":
                     res["trade"] = c["trade"]
         return res
@@ -298,7 +351,8 @@ class PredictionService:
             "inferences": self.inferences, "samples": settings.n_samples,
             "lookback": settings.base_lookback if self.model_key == "base" else settings.lookback,
             "scanned": len({s for (s, tf) in self.cache if tf == "15m"} & set(self.active_symbols())),
-            "active": len(self.active_symbols()),
+            "active": len(self.active_symbols()), "scan_latency": self.scan_latency,
+            "tokens_auto": self.model_key == "base" and not MODEL_UNIVERSE.get("base"),
         }
 
 
@@ -310,11 +364,16 @@ class Calibration:
         self.stats: dict[str, dict] = defaultdict(lambda: {"n": 0, "hits": 0, "brier": 0.0, "covered": 0})
 
     def register(self, res: dict) -> None:
+        sec = TIMEFRAMES[res["tf"]]
         for label, (secs, tf, step) in HORIZONS.items():
             if tf != res["tf"]:
                 continue
             st = horizon_stats(res["paths"], res["last"], step)
-            self.pending.append((res["ts"] + secs, label, res["symbol"], res["last"], st["p_up"], st["q10"], st["q90"]))
+            # path index step-1 is the close of the bar opening `step` bars after the forming one: it closes at
+            # bar_t + (step + 1) bars, which is when this forecast is scored (before: forecast time + horizon,
+            # up to one bar later than the step that was read)
+            due = res.get("bar_t", res["ts"] - sec) + (step + 1) * sec
+            self.pending.append((due, label, res["symbol"], res["last"], st["p_up"], st["q10"], st["q90"]))
         if len(self.pending) > 20000:
             self.pending = self.pending[-20000:]
 
@@ -338,7 +397,7 @@ class Calibration:
             s["hits"] += int((p_up > 0.5) == (r > 0))
             s["brier"] += (p_up - up) ** 2
             s["covered"] += int(q10 <= r <= q90)
-            done.append({"label": label, "symbol": sym, "p_up": p_up, "ret": r})
+            done.append({"label": label, "symbol": sym, "p_up": p_up, "ret": r, "covered": int(q10 <= r <= q90)})
         self.pending = keep
         return done
 

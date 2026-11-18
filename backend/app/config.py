@@ -39,11 +39,19 @@ class Settings:
     decision_tokenizer: str = os.getenv("PP_DECISION_TOKENIZER", "NeoQuasar/Kronos-Tokenizer-base")
     kronos_max_context: int = _i("PP_KRONOS_MAX_CONTEXT", 512)
     lookback: int = _i("PP_LOOKBACK", 128)  # bars fed to the model (CPU budget)
-    # Kronos-base: 64 15m bars (16 h) keep one 32-step forecast at ~20 s per token on CPU (128 bars: ~44 s)
-    base_lookback: int = _i("PP_BASE_LOOKBACK", 64)
-    base_tokens: int = _i("PP_BASE_TOKENS", 20)  # tokens analysed with Kronos-base, by market cap
+    # Kronos-base context: 128 15m candles (32 h). Measured on the user's CPU with 32 steps: 64 bars ~21 s, 128 bars
+    # ~44 s; the forecast is now 18 steps (4 h + slack), so 128 bars should cost about what 64 did before
+    base_lookback: int = _i("PP_BASE_LOOKBACK", 128)
+    # tokens analysed with Kronos-base, by market cap. 0 = automatic: as many as one scan cycle (scan_age_s) fits at
+    # the measured time per forecast, minus the open positions' forecasts
+    base_tokens: int = _i("PP_BASE_TOKENS", 0)
+    base_tokens_min: int = _i("PP_BASE_TOKENS_MIN", 6)
     scan_age_s: float = _f("PP_SCAN_AGE", 300.0)  # a token is re-forecast once its forecast is this old
     n_samples: int = _i("PP_SAMPLES", 24)  # sampled futures per prediction
+    # the forecast re-run right before an entry: more samples, so the 70% is measured to about +/-5 points
+    # instead of +/-9 (24 samples); it costs ~4x one scan forecast, once per entry
+    decision_samples: int = _i("PP_DECISION_SAMPLES", 96)
+    position_refresh_s: float = _f("PP_POSITION_REFRESH", 300.0)  # 4h forecast of open positions, for the exits
     temperature: float = _f("PP_TEMPERATURE", 1.0)
     top_p: float = _f("PP_TOP_P", 0.9)
 
@@ -64,6 +72,10 @@ class Settings:
     # entry (0.5 = a long liquidates only below half its entry price, a short only above 1.5x)
     liq_min_distance: float = _f("PP_LIQ_DISTANCE", 0.5)
     min_margin_usdc: float = _f("PP_MIN_MARGIN", 10.0)
+    # exposure caps (notional / total capital): leverage only lowers the margin locked, it no longer multiplies
+    # the exposure of a "low risk" trade up to ~190% of the capital on a single token
+    max_token_exposure: float = _f("PP_MAX_TOKEN_EXPOSURE", 0.50)
+    max_total_exposure: float = _f("PP_MAX_TOTAL_EXPOSURE", 1.50)
     max_positions: int = _i("PP_MAX_POSITIONS", 0)  # 0 = no fixed cap: the liquidation-distance rule is the limit
     paper_start_balance: float = _f("PP_PAPER_BALANCE", 1000.0)
     taker_fee: float = _f("PP_TAKER_FEE", 0.0006)  # per side, on notional
@@ -79,8 +91,12 @@ class Settings:
     drop_priority_pct: float = _f("PP_DROP_PRIORITY", 5.0)  # >5% drop in 4/8/12 h moves a token up the opening queue
     entry_zone: float = _f("PP_ENTRY_ZONE", 0.20)
     zone_bypass_risk: float = _f("PP_ZONE_BYPASS_RISK", 0.35)  # (superseded by the predicted entry point)
-    min_confidence_8h: float = _f("PP_MIN_CONF_8H", 0.50)  # 8h only confirms the trend is up (> 50%); the 70% is on 4h
-    entry_tolerance: float = _f("PP_ENTRY_TOL", 0.002)  # enter within 0.2% of the predicted low point  # long in the lowest 20% of the 4h range, short in the highest 20%
+    entry_tolerance: float = _f("PP_ENTRY_TOL", 0.002)  # enter within 0.2% of the predicted entry point
+    dip_quantile: float = _f("PP_DIP_QUANTILE", 0.5)  # entry point = this quantile of the lowest price of each path
+    # market filter: no long while BTC is falling over 4 h or 24 h (the altcoins follow it); a long is allowed only
+    # if BTC's change is above -threshold (0 = any fall blocks)
+    btc_filter_4h: float = _f("PP_BTC_FILTER_4H", 0.0)
+    btc_filter_24h: float = _f("PP_BTC_FILTER_24H", 0.0)
     exit_margin: float = _f("PP_EXIT_MARGIN", 0.10)  # reversal only if the opposite direction reaches 50% + margin
     exit_confirmations: int = _i("PP_EXIT_CONFIRM", 2)  # consecutive 4h forecasts confirming the reversal
     use_take_profit: bool = os.getenv("PP_USE_TP", "0") == "1"  # fixed +5% take profit (off: exit on reversal)
@@ -90,8 +106,10 @@ class Settings:
     use_initial_stop: bool = os.getenv("PP_USE_SL", "0") == "1"  # 1 restores the fixed -2% leveraged stop
     recovery_hours: float = _f("PP_RECOVERY_HOURS", 2.0)
     recovery_min_prob: float = _f("PP_RECOVERY_MIN_PROB", 0.5)
-    lock_trigger_pct: float = _f("PP_LOCK_TRIGGER", 5.0)  # once the leveraged gain reaches +5%...
-    lock_profit_pct: float = _f("PP_LOCK_PROFIT", 2.0)  # ...the stop moves to +2% leveraged profit
+    # protective stop: placed where the position would close at +2% NET profit on the margin (fees, slippage and
+    # funding paid), armed once the price is one 15m ATR above that level
+    lock_profit_pct: float = _f("PP_LOCK_PROFIT", 2.0)
+    lock_atr_mult: float = _f("PP_LOCK_ATR", 1.0)
     analyst_close_threshold: float = _f("PP_ANALYST_CLOSE", 70.0)
     analyst_pause_threshold: float = _f("PP_ANALYST_PAUSE", 55.0)
     news_poll_s: int = _i("PP_NEWS_POLL_S", 120)
@@ -112,6 +130,7 @@ HORIZONS: dict[str, tuple[int, str, int]] = {
     "1h": (3600, "15m", 4),
     "4h": (14400, "15m", 16),
 }
-# steps sampled per timeframe: the cone on the chart goes this far (1m: 30 min, 5m: 2 h, 15m: 8 h)
-PRED_LEN = {"5s": 12, "1m": 30, "5m": 24, "15m": 32}
+# steps sampled per timeframe. 15m: 18 steps = 4 h (the farthest horizon, no 8 h any more) + 2 bars of slack, so a
+# forecast up to two 15m candles old can still be read exactly 4 hours ahead of now
+PRED_LEN = {"5s": 12, "1m": 30, "5m": 24, "15m": 18}
 EXPERIMENTAL_HORIZONS: set[str] = set()  # sub-minute horizons were removed

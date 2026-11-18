@@ -22,7 +22,18 @@ CREATE TABLE IF NOT EXISTS trades (
 CREATE TABLE IF NOT EXISTS calibration (
     ts REAL, label TEXT, symbol TEXT, p_up REAL, ret REAL
 );
+CREATE TABLE IF NOT EXISTS signals (
+    ts REAL, due REAL, symbol TEXT, price REAL, p_up_4h REAL, entry_ok INTEGER, eligible INTEGER,
+    extra_risk REAL, reasons TEXT, model TEXT, samples INTEGER, ret REAL, PRIMARY KEY (symbol, ts)
+);
 """
+# 4h buckets of the Kronos long probability: the Executor's threshold is 70%, so the useful detail is above it
+PROB_EDGES = [0.5, 0.6, 0.7, 0.75, 0.8]
+PROB_LABELS = ["<50%", "50-60%", "60-70%", "70-75%", "75-80%", ">80%"]
+# the user's risk tiers (margin 10/7/5/3% of capital)
+RISK_EDGES = [0.25, 0.30, 0.35, 0.40]
+RISK_LABELS = ["fino al 25%", "25-30%", "30-35%", "35-40%", "oltre 40%"]
+COSTS = 2 * (settings.taker_fee + settings.slippage)  # round trip, on the price
 
 
 def _bucket(x: float | None, edges: list[float], labels: list[str]) -> str:
@@ -39,8 +50,13 @@ class Controller:
         self.bus = bus
         self.db = sqlite3.connect(settings.db_path, check_same_thread=False)
         self.db.executescript(SCHEMA)
+        try:  # databases made before the coverage column
+            self.db.execute("ALTER TABLE calibration ADD COLUMN covered INTEGER")
+        except sqlite3.OperationalError:
+            pass
         self.db.commit()
         self.predictor = None  # set by main (for calibration)
+        self.executor = None  # set by main (open positions in the report)
 
     # --------------------------------------------------------------- input
     def record_trade(self, p) -> None:
@@ -57,9 +73,64 @@ class Controller:
         if not rows:
             return
         now = time.time()
-        self.db.executemany("INSERT INTO calibration VALUES (?,?,?,?,?)",
-                            [(now, r["label"], r["symbol"], r["p_up"], r["ret"]) for r in rows])
+        self.db.executemany("INSERT INTO calibration (ts, label, symbol, p_up, ret, covered) VALUES (?,?,?,?,?,?)",
+                            [(now, r["label"], r["symbol"], r["p_up"], r["ret"], r.get("covered")) for r in rows])
         self.db.commit()
+
+    # --------------------------------------------------------------- signal register
+    def record_signal(self, row: dict) -> None:
+        """One row per new 4h forecast of a token (first Checker evaluation), executed or not."""
+        self.db.execute(
+            "INSERT OR IGNORE INTO signals VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL)",
+            (row["ts"], row["due"], row["symbol"], row["price"], row["p_up_4h"], int(row["entry_ok"]),
+             int(row["eligible"]), row.get("extra_risk"), json.dumps(row.get("reasons") or []), row.get("model", ""),
+             row.get("samples", 0)),
+        )
+        self.db.commit()
+
+    def resolve_signals(self, price_of) -> int:
+        """Fill in the real 4h return of the signals whose horizon has elapsed."""
+        now = time.time()
+        due = self.db.execute("SELECT symbol, ts, price FROM signals WHERE ret IS NULL AND due <= ?", (now,)).fetchall()
+        done = 0
+        for sym, ts, p0 in due:
+            p1 = price_of(sym)
+            if p1 and p0:
+                self.db.execute("UPDATE signals SET ret = ? WHERE symbol = ? AND ts = ?", (p1 / p0 - 1, sym, ts))
+                done += 1
+        if done:
+            self.db.commit()
+        return done
+
+    def signal_stats(self) -> dict:
+        """How the 4h forecasts did, by long-probability bucket: all signals, then only those the Checker passed.
+        `win` = the 4h return beat the round-trip costs (what a long needs to be in profit)."""
+        rows = self.db.execute("SELECT p_up_4h, entry_ok, eligible, ret FROM signals WHERE ret IS NOT NULL").fetchall()
+
+        def agg(sel):
+            out = []
+            for lab in PROB_LABELS:
+                rs = [r for r in sel if _bucket(r[0], PROB_EDGES, PROB_LABELS) == lab]
+                if rs:
+                    out.append({"key": lab, "n": len(rs), "up": sum(1 for r in rs if r[3] > 0) / len(rs),
+                                "win": sum(1 for r in rs if r[3] > COSTS) / len(rs),
+                                "avg_ret": sum(r[3] for r in rs) / len(rs)})
+            return out
+
+        return {"all": agg(rows), "entry_ok": agg([r for r in rows if r[1]]), "eligible": agg([r for r in rows if r[2]]),
+                "pending": self.db.execute("SELECT COUNT(*) FROM signals WHERE ret IS NULL").fetchone()[0]}
+
+    def open_view(self) -> dict | None:
+        """Open positions: their unrealized result is part of the strategy's result (losers are never closed)."""
+        if self.executor is None:
+            return None
+        ps = self.executor.open_positions()
+        if not ps:
+            return {"n": 0, "unrealized": 0.0, "losing": 0, "worst": None}
+        worst = min(ps, key=lambda p: p.pnl)
+        return {"n": len(ps), "unrealized": sum(p.pnl for p in ps), "losing": sum(1 for p in ps if p.pnl < 0),
+                "worst": {"base": worst.base, "pnl": worst.pnl, "move": worst.side * ((worst.last_price or worst.entry) / worst.entry - 1),
+                          "hours": (time.time() - worst.opened_ts) / 3600}}
 
     # --------------------------------------------------------------- analysis
     def trades(self, limit: int = 500) -> list[dict]:
@@ -96,10 +167,12 @@ class Controller:
     def calibration(self) -> list[dict]:
         cur = self.db.execute(
             "SELECT label, COUNT(*), AVG(CASE WHEN (p_up > 0.5) = (ret > 0) THEN 1.0 ELSE 0.0 END),"
-            " AVG((p_up - (ret > 0)) * (p_up - (ret > 0))) FROM calibration WHERE ret != 0 GROUP BY label"
+            " AVG((p_up - (ret > 0)) * (p_up - (ret > 0))), AVG(covered) FROM calibration WHERE ret != 0 GROUP BY label"
         )
         order = ["10s", "30s", "1m", "5m", "15m", "30m", "1h", "4h"]
-        rows = [{"label": l, "n": n, "hit_rate": h, "brier": b} for l, n, h, b in cur.fetchall()]
+        # coverage: share of real returns inside the forecast's 10-90% band; ~80% if the cone is honest,
+        # lower means the cone is too narrow (top_p cuts the tails)
+        rows = [{"label": l, "n": n, "hit_rate": h, "brier": b, "coverage": c} for l, n, h, b, c in cur.fetchall()]
         rows.sort(key=lambda r: order.index(r["label"]) if r["label"] in order else 99)
         return rows
 
@@ -111,17 +184,23 @@ class Controller:
             "per_lato": self._group(rows, lambda r: r["side"]),
             "per_leva": self._group(rows, lambda r: f"{int(r['leverage'])}x"),
             "per_pattern": self._group(rows, lambda r: sig(r, "regime") or "n/d"),
-            "per_prob_kronos": self._group(rows, lambda r: _bucket(sig(r, "kronos_p_tp"), [0.4, 0.5, 0.6, 0.7], ["<40%", "40-50%", "50-60%", "60-70%", ">70%"])),
-            "per_rischio": self._group(rows, lambda r: _bucket(sig(r, "extra_risk"), [0.3, 0.45, 0.6], ["basso <30%", "medio 30-45%", "alto 45-60%", ">60%"])),
+            "per_prob_kronos": self._group(rows, lambda r: _bucket(sig(r, "conf_4h") or sig(r, "kronos_p_tp"), PROB_EDGES, PROB_LABELS)),
+            "per_rischio": self._group(rows, lambda r: _bucket(sig(r, "extra_risk"), RISK_EDGES, RISK_LABELS)),
             "per_motivo_chiusura": self._group(rows, lambda r: r["reason"].split(" (")[0] if r["reason"] else "n/d"),
             "per_modalita": self._group(rows, lambda r: r["mode"]),
         }
         insights = self._insights(rows, groups)
         return {"summary": self._agg(rows), "groups": groups, "insights": insights,
-                "calibration": self.calibration(), "recent": rows[:50], "generated": time.time()}
+                "calibration": self.calibration(), "signals": self.signal_stats(), "open": self.open_view(),
+                "recent": rows[:50], "generated": time.time()}
 
     def _insights(self, rows, groups) -> list[str]:
         out = []
+        ov = self.open_view()
+        if ov and ov["losing"]:
+            w = ov["worst"]
+            out.append(f"{ov['losing']} posizioni aperte in perdita, risultato non realizzato {ov['unrealized']:+.2f} USDC: "
+                       f"non è nel win rate delle operazioni chiuse. Peggiore {w['base']} {w['move'] * 100:+.1f}% da {w['hours']:.0f} h.")
         if len(rows) < 5:
             out.append(f"Storico ancora ridotto ({len(rows)} operazioni): servono almeno 20-30 chiusure per conclusioni affidabili.")
         for name, label in (("per_token", "token"), ("per_pattern", "pattern"), ("per_prob_kronos", "fascia di probabilità Kronos")):
@@ -161,9 +240,21 @@ class Controller:
             for g in r["groups"][k]:
                 lines.append(f"| {g['key']} | {g['n']} | {g['win_rate'] * 100:.0f}% | {g['pnl']:+.2f} | {g['avg_roe']:+.2f}% |")
             lines.append("")
-        lines += ["## Affidabilità delle previsioni (verificate a scadenza)", "", "| Orizzonte | Previsioni | Direzione corretta | Brier |", "|---|---:|---:|---:|"]
+        ov = r["open"]
+        if ov is not None:
+            lines += ["## Posizioni aperte", "", f"**Aperte:** {ov['n']} · **In perdita:** {ov['losing']} · **Risultato non realizzato:** {ov['unrealized']:+.2f} USDC", ""]
+        lines += ["## Affidabilità delle previsioni (verificate a scadenza)", "",
+                  "| Orizzonte | Previsioni | Direzione corretta | Brier | Copertura 10-90% (attesa ~80%) |", "|---|---:|---:|---:|---:|"]
         for c in r["calibration"]:
-            lines.append(f"| {c['label']} | {c['n']} | {c['hit_rate'] * 100:.1f}% | {c['brier']:.3f} |")
+            cov = f"{c['coverage'] * 100:.0f}%" if c.get("coverage") is not None else "n/d"
+            lines.append(f"| {c['label']} | {c['n']} | {c['hit_rate'] * 100:.1f}% | {c['brier']:.3f} | {cov} |")
+        sg = r["signals"]
+        for key, title in (("all", "tutte le previsioni"), ("entry_ok", "con prezzo al punto d'ingresso"), ("eligible", "idonee per l'Executor")):
+            lines += ["", f"## Registro segnali a 4 ore: {title}", "",
+                      "| Probabilità long | Segnali | Rialzo a 4 ore | Oltre i costi | Ritorno medio |", "|---|---:|---:|---:|---:|"]
+            for g in sg[key]:
+                lines.append(f"| {g['key']} | {g['n']} | {g['up'] * 100:.0f}% | {g['win'] * 100:.0f}% | {g['avg_ret'] * 100:+.2f}% |")
+        lines.append(f"\nSegnali in attesa di scadenza: {sg['pending']}")
         return "\n".join(lines) + "\n"
 
     async def run(self) -> None:
@@ -172,6 +263,7 @@ class Controller:
                 if self.predictor is not None:
                     rows = self.predictor.calib.resolve(self.predictor.feed.store.last_price)
                     self.record_calibration(rows)
+                    self.resolve_signals(self.predictor.feed.store.last_price)
                 self.bus.publish("report", self.report())
             except Exception:
                 log.exception("controller cycle failed")

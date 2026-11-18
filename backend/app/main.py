@@ -35,6 +35,8 @@ executor = Executor(feed, checker, controller, bus, settings.paper_state_path)
 analyst = Analyst(feed, checker, executor, bus)
 executor.predictor = predictor
 controller.predictor = predictor
+controller.executor = executor  # open positions (unrealized result) in the report
+checker.controller = controller  # signal register: every new 4h forecast and its real outcome
 _focus: dict[str, float] = {}
 _client_horizon: dict[int, str] = {}  # each open dashboard sorts by its own horizon
 
@@ -139,10 +141,12 @@ def state():
 
 
 @app.get("/api/candles/{symbol}")
-def candles(symbol: str, tf: str = "1m", n: int = 300, since: float | None = None):
-    if tf not in ("5s", "1m", "5m", "15m"):
-        raise HTTPException(400, "tf must be 5s, 1m, 5m or 15m")
-    bars = feed.store.get(symbol, tf, min(n, 3000))
+def candles(symbol: str, tf: str = "15m", n: int = 300, since: float | None = None):
+    agg = {"1h": 3600, "4h": 14400}
+    if tf not in ("5s", "1m", "5m", "15m", *agg):
+        raise HTTPException(400, "tf must be 5s, 1m, 5m, 15m, 1h or 4h")
+    # 1 h and 4 h candles are built from the 15m ones, the same series Kronos reads
+    bars = feed.store.get_agg(symbol, "15m", agg[tf], min(n, 3000)) if tf in agg else feed.store.get(symbol, tf, min(n, 3000))
     if since is not None and len(bars):
         bars = bars[bars[:, 0] >= since]  # incremental refresh: only bars from `since` on
     return {"symbol": symbol, "tf": tf, "bars": bars.tolist()}

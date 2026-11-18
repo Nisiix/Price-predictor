@@ -10,7 +10,7 @@ export type HorizonStat = {
   price_q90: number; tf: string; step: number; path_step?: number; seconds: number; source: string; age: number; experimental: boolean;
   accuracy?: { n: number; hit_rate: number; brier: number; coverage: number } | null;
 };
-export type Fan = { t: number[]; q10: number[]; q25: number[]; q50: number[]; q75: number[]; q90: number[]; anchor: number; bar_t: number; source: string; age: number };
+export type Fan = { t: number[]; q10: number[]; q25: number[]; q50: number[]; q75: number[]; q90: number[]; anchor: number; bar_t: number; ts: number; tf_seconds: number; source: string; age: number };
 export type TradeOption = { side: "long" | "short"; leverage: number; p_tp: number; p_sl: number; p_liq: number; p_open: number; ev: number; levels: { tp: number; sl: number; liq: number } };
 export type Snapshot = {
   symbol: string; horizons: Record<string, HorizonStat | null>; fans: Record<string, Fan>;
@@ -25,7 +25,7 @@ export type CheckerRow = {
   p_up_4h: number; conf_4h: number; range_pos: number; in_zone: boolean;
   horizons: HorizonPick[]; best_h: HorizonPick | null;
   drops: Record<string, number>; drop_priority: number; drop_window: string | null;
-  p_up_8h: number; dip_price: number; dip_minutes: number; entry_ok: boolean;
+  dip_price: number; dip_minutes: number; entry_ok: boolean;
 };
 export type Position = {
   id: string; symbol: string; base: string; side: "long" | "short"; leverage: number; margin: number; entry: number;
@@ -41,7 +41,7 @@ export type ExecutorView = {
   mode: "paper" | "real"; auto: boolean; wallet: string | null; real_ready: boolean; real_auto: boolean; balance: number;
   equity: number; positions: Position[]; pending: any[]; intents: Intent[]; max_positions: number; margin_usdc: number; risk_tiers: [number, number][]; risk_tier_above: number;
   tp_pct: number; sl_pct: number; use_tp: boolean; exit_margin: number; exit_confirmations: number; entry_zone: number;
-  lock_trigger_pct: number; lock_profit_pct: number;
+  lock_atr_mult: number; lock_profit_pct: number; max_token_exposure: number; max_total_exposure: number;
   use_initial_stop: boolean; recovery_hours: number; recovery_min_prob: number; liq_min_distance: number; equity_now: number; hold_losers: boolean; longs_only: boolean;
   paper: PaperCapital;
 };

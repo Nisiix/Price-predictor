@@ -7,13 +7,15 @@ import { HORIZON_CHOICES, HorizonLadder, Positions, Watchlist, horizonName } fro
 import { Ticket, WalletPanel } from "./components/Ticket";
 import { useRealTrading } from "./wallet/useRealTrading";
 
-const TF_SECONDS: Record<string, number> = { "5s": 5, "1m": 60, "5m": 300, "15m": 900 };
-// horizon -> [candle timeframe, steps on that timeframe] (mirrors backend/app/config.py HORIZONS)
-const HORIZON_TF: Record<string, ["5s" | "1m" | "5m" | "15m", number]> = {
-  // every horizon is read from the same 15m forecast (one Kronos run per token)
-  "15m": ["15m", 1], "1h": ["15m", 4], "4h": ["15m", 16],
+const TF_SECONDS: Record<string, number> = { "15m": 900, "1h": 3600, "4h": 14400 };
+// horizon -> [chart candle timeframe, steps of the 15m forecast] (mirrors backend/app/config.py HORIZONS).
+// Every horizon is read from the same 15m Kronos forecast; the chart shows candles of the horizon's own timeframe
+// (1 h and 4 h candles are built from the 15m ones) and the cone placed on them by time.
+const HORIZON_TF: Record<string, ["15m" | "1h" | "4h", number]> = {
+  "15m": ["15m", 1], "1h": ["1h", 4], "4h": ["4h", 16],
 };
-const TF_NAME: Record<string, string> = { "5s": "candele da 5 secondi", "1m": "candele da 1 minuto", "5m": "candele da 5 minuti", "15m": "candele da 15 minuti" };
+const FORECAST_TF = "15m";
+const TF_NAME: Record<string, string> = { "15m": "candele da 15 minuti", "1h": "candele da 1 ora", "4h": "candele da 4 ore" };
 
 export default function App() {
   const [focus, setFocus] = useState<string | null>(() => {
@@ -76,7 +78,7 @@ export default function App() {
       }).catch(() => {});
     };
     loadFull();
-    const id = window.setInterval(loadNew, tf === "5s" ? 1000 : 3000);
+    const id = window.setInterval(loadNew, 3000);
     // older pages arrive in the background during the first minutes: re-read the full series a few times
     const deep = window.setInterval(() => { if (fullLoads < 6) loadFull(); }, 30_000);
     return () => { alive = false; window.clearInterval(id); window.clearInterval(deep); };
@@ -101,21 +103,30 @@ export default function App() {
   const m = live.markets.find((x) => x.symbol === focus);
   const snap: Snapshot | undefined = focus ? { ...(detail ?? ({} as Snapshot)), ...(live.focus[focus] ?? {}), checker: detail?.checker } : undefined;
   // the whole sampled projection; the selected horizon is marked on it
-  const fan = snap?.fans?.[tf] ?? null;
+  const fan = snap?.fans?.[FORECAST_TF] ?? null;
   const px = focus ? live.prices[focus]?.p ?? m?.mark_price : undefined;
   const chg = focus ? live.prices[focus]?.c ?? m?.change_24h ?? 0 : 0;
 
-  // live candle: patch the last bar with the latest tick so the chart moves every second
+  // live candle: the latest tick moves the forming candle every second; when a new candle of this timeframe has
+  // started and the next candle refresh has not brought it yet, it is opened here at the live price (before, the
+  // tick kept moving the previous, already closed candle)
+  const tfSec = TF_SECONDS[tf];
   const liveBars = useMemo(() => {
     if (!bars.length || !px) return bars;
     const out = bars.slice();
-    const last = out[out.length - 1].slice();
+    const open = Math.floor(Date.now() / 1000 / tfSec) * tfSec;
+    const lastBar = out[out.length - 1];
+    if (open > lastBar[0]) {
+      out.push([open, lastBar[4], Math.max(lastBar[4], px), Math.min(lastBar[4], px), px, 0]);
+      return out;
+    }
+    const last = lastBar.slice();
     last[2] = Math.max(last[2], px);
     last[3] = Math.min(last[3], px);
     last[4] = px;
     out[out.length - 1] = last;
     return out;
-  }, [bars, px]);
+  }, [bars, px, tfSec]);
 
   const levels = useMemo(() => {
     const ls: { y: number; label: string; color: string }[] = [];
@@ -219,10 +230,10 @@ export default function App() {
                     {HORIZON_CHOICES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
                   </select>
                 </label>
-                {fan ? <span className="note">Proiezione Kronos fino a {fmtDur(fan.q50.length * TF_SECONDS[tf])} su {TF_NAME[tf]}, orizzonte {horizonName(horizon)} segnato sul grafico, aggiornata {Math.round(fan.age)}s fa{fan.source !== "kronos" ? " (stima statistica)" : ""}</span>
-                  : <span className="note">{tf === "5s" ? "Le candele da 5 secondi si formano dai tick live: servono circa 4 minuti dopo l'avvio." : "Previsione in calcolo per questo token."}</span>}
+                {fan ? <span className="note">Proiezione Kronos fino a {fmtDur(fan.q50.length * fan.tf_seconds)} (passi da 15 minuti) su {TF_NAME[tf]}, orizzonte {horizonName(horizon)} segnato sul grafico, aggiornata {Math.round(fan.age)}s fa{fan.source !== "kronos" ? " (stima statistica)" : ""}</span>
+                  : <span className="note">Previsione in calcolo per questo token.</span>}
               </div>
-              <Chart bars={liveBars} fan={fan} levels={levels} tfSeconds={TF_SECONDS[tf]} resetKey={`${focus}:${tf}`} markStep={hstat?.tf === tf && hstat.path_step ? hstat.path_step : steps} markLabel={horizonName(horizon)} />
+              <Chart bars={liveBars} fan={fan} levels={levels} tfSeconds={TF_SECONDS[tf]} resetKey={`${focus}:${tf}`} markStep={hstat?.path_step ?? steps} markLabel={horizonName(horizon)} />
               <div className="legend">
                 <span><i style={{ background: "var(--kronos)", opacity: 0.35 }} />80% dei futuri campionati</span>
                 <span><i style={{ background: "var(--kronos)", opacity: 0.6 }} />50% centrale</span>

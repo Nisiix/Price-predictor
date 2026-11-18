@@ -66,6 +66,24 @@ class CandleStore:
             arr = np.array(dq, dtype=float)
         return arr[-n:] if n else arr
 
+    def get_agg(self, sym: str, tf: str, seconds: int, n: int | None = None) -> np.ndarray:
+        """Candles of `seconds` (1 h, 4 h, aligned to UTC) built from the stored `tf` candles: first open, highest
+        high, lowest low, last close, summed volume. The last one is still forming while its last `tf` candle is."""
+        src = self.get(sym, tf)
+        if not len(src):
+            return src
+        keys = (src[:, 0] // seconds * seconds).astype(np.int64)
+        starts = np.flatnonzero(np.r_[True, keys[1:] != keys[:-1]])
+        ends = np.r_[starts[1:], len(src)]
+        out = np.empty((len(starts), src.shape[1]))
+        out[:, 0] = keys[starts]
+        out[:, 1] = src[starts, 1]
+        out[:, 2] = np.maximum.reduceat(src[:, 2], starts)
+        out[:, 3] = np.minimum.reduceat(src[:, 3], starts)
+        out[:, 4] = src[ends - 1, 4]
+        out[:, 5] = np.add.reduceat(src[:, 5], starts)
+        return out[-n:] if n else out
+
     def last_price(self, sym: str) -> float | None:
         for tf in ("5s", "1m", "5m"):
             arr = self.get(sym, tf, 1)

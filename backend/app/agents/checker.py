@@ -41,6 +41,9 @@ class Checker:
         self.excluded: set[str] = set()
         self._library15: dict[str, np.ndarray] = {}
         self._library15_ts = 0.0
+        self.controller = None  # set by main: every new 4h forecast is logged with its outcome (signal register)
+        self._logged: dict[str, float] = {}  # symbol -> ts of the last forecast logged
+        self.btc = {"ok": True, "chg_4h": None, "chg_24h": None}
 
     def pause(self, seconds: float, reason: str) -> None:
         self.paused_until = max(self.paused_until, time.time() + seconds)
@@ -77,12 +80,32 @@ class Checker:
         lev = 20 if risk < 0.25 else 15 if risk < 0.35 else 12 if risk < 0.45 else 10
         return min(lev, max_lev)
 
-    def evaluate(self, sym: str, decision: bool = False) -> dict | None:
+    def btc_trend(self) -> dict:
+        """Market filter: BTC's change over the last 4 and 24 hours (15m candles, live price).
+        Longs are allowed only while neither is below -threshold (default 0: any fall blocks)."""
+        sym = "PERP_BTC_USDC"
+        bars = self.feed.store.get(sym, "15m", 100)
+        price = self.feed.store.last_price(sym)
+        out = {"ok": True, "chg_4h": None, "chg_24h": None}
+        if not price or len(bars) < 98:
+            return out  # no BTC data yet: the filter cannot judge, it does not block
+        closes = bars[:, 4]
+        if bars[-1, 0] + 900 > time.time():
+            closes = closes[:-1]  # forming candle
+        out["chg_4h"] = float(price / closes[-16] - 1)
+        out["chg_24h"] = float(price / closes[-96] - 1)
+        out["ok"] = out["chg_4h"] >= -settings.btc_filter_4h and out["chg_24h"] >= -settings.btc_filter_24h
+        return out
+
+    def evaluate(self, sym: str, decision: bool = False, forecast: dict | None = None) -> dict | None:
         """4-hour plan for one token: direction and probability from Kronos (15m candles, 16 steps),
         extra risk from indicators, historical analogs, volatility and macro, and the entry zone
         (position of the price inside the last 4 hours' range)."""
         m = self.feed.markets.get(sym)
-        c4 = self.predictor.decision_cache(sym) if decision else self.predictor.cache.get((sym, "15m"))
+        if forecast is not None:
+            c4 = forecast  # the forecast just computed for this decision (Executor, right before an entry)
+        else:
+            c4 = self.predictor.decision_cache(sym) if decision else self.predictor.cache.get((sym, "15m"))
         bars15 = self.feed.store.get(sym, "15m")
         bars5 = self.feed.store.get(sym, "5m", 48)  # last 4 hours
         if not m or not c4 or len(bars15) < 64 or len(bars5) < 12:
@@ -104,12 +127,8 @@ class Checker:
         exp_ret = float((closes / price - 1).mean())
         median_4h = float(np.median(closes))
         drift = price / c4["last"] - 1  # how far the price moved since the forecast was computed
-        # 8 hours: the tail of the same 15m projection (32 steps)
-        i8 = horizon_index(c4["bar_t"], 900, 32, L, now)
-        closes8 = c4["paths"][:, L - 1 if i8 is None else i8, 3]  # older forecast: its tail is the farthest it reaches
-        p_up_8h = float((closes8 > price).mean())
-        # predicted entry point: lowest point of the median path before the 4h horizon
-        dip_price, dip_step = predicted_dip(c4["paths"][:, elapsed:], step)  # only bars still ahead of now
+        # predicted entry point: from the lowest price of each sampled path before the 4h horizon
+        dip_price, dip_step = predicted_dip(c4["paths"][:, elapsed:], step, settings.dip_quantile)  # bars still ahead
         entry_ok = price <= dip_price * (1 + settings.entry_tolerance)
         ind = indicator_view(bars15)
 
@@ -149,9 +168,6 @@ class Checker:
         if score < settings.min_signal_score:
             reasons.append("punteggio sotto soglia")
         zone_bypass = False  # the 4h-range zone is replaced by the predicted entry point
-        if side > 0 and p_up_8h <= settings.min_confidence_8h:
-            reasons.append("trend a 8 ore non al rialzo" if settings.min_confidence_8h <= 0.5
-                           else f"previsione a 8 ore non oltre il {settings.min_confidence_8h * 100:.0f}% di rialzo")
         if side > 0 and not entry_ok:
             reasons.append(f"in attesa del punto d'ingresso previsto ({dip_price:.6g}, tra circa {(dip_step + 1) * 15} min)")
         costs = 2 * (settings.taker_fee + settings.slippage)
@@ -161,9 +177,14 @@ class Checker:
             reasons.append("prezzo attuale già sotto la mediana prevista a 4 ore")
         if time.time() - c4["ts"] > settings.max_forecast_age_s:
             reasons.append("previsione a 4 ore troppo vecchia")
+        btc = self.btc
+        if side > 0 and not btc["ok"]:
+            reasons.append(f"BTC in calo (4 ore {btc['chg_4h'] * 100:+.1f}%, 24 ore {btc['chg_24h'] * 100:+.1f}%)")
         if settings.longs_only and side < 0:
             reasons.insert(0, "previsione al ribasso: l'Executor apre solo long")
         eligible = not reasons
+        if forecast is None and not decision:
+            self._log_signal(sym, c4, price, p_up, entry_ok, eligible and not self.paused, reasons, extra_risk)
 
         # recent sharp drops (> drop_priority_pct over 4/8/12 h): only an ordering priority among eligible tokens
         closes15 = bars15[:, 4]
@@ -209,7 +230,7 @@ class Checker:
             "p_up_4h": p_up, "conf_4h": conf, "exp_ret_4h": exp_ret, "median_4h": median_4h,
             "forecast_price": c4["last"], "drift": drift,
             "range_pos": range_pos, "range_hi": hi4, "range_lo": lo4, "in_zone": in_zone, "zone_bypass": zone_bypass,
-            "p_up_8h": p_up_8h, "dip_price": dip_price, "dip_minutes": (dip_step + 1) * 15, "entry_ok": entry_ok,
+            "dip_price": dip_price, "dip_minutes": (dip_step + 1) * 15, "entry_ok": entry_ok,
             "kronos_p_tp": conf,  # probability used by the Controller buckets
             "kronos_p_sl": 1 - conf, "kronos_p_liq": best["p_liq"] if best else 0.0,
             "ev": exp_ret * side * lev,
@@ -220,13 +241,31 @@ class Checker:
             "source": c4["source"], "age": time.time() - c4["ts"], "options": c1["trade"]["options"][:4] if best else [],
             "horizons": per_h, "best_h": best_h,
             "drops": drops, "drop_priority": drop_priority, "drop_window": worst[0] if drop_priority else None,
-            "model": c4.get("model", ""),
+            "model": c4.get("model", ""), "samples": int(c4["paths"].shape[0]), "forecast_ts": c4["ts"],
+            "btc_chg_4h": btc["chg_4h"], "btc_chg_24h": btc["chg_24h"],
         }
+
+    def _log_signal(self, sym, c4, price, p_up, entry_ok, eligible, reasons, extra_risk) -> None:
+        """Signal register: the first evaluation of every new 4h forecast, executed or not, with what the Checker
+        decided; the Controller fills in the real 4h return when it is due."""
+        if self.controller is None or self._logged.get(sym) == c4["ts"]:
+            return
+        self._logged[sym] = c4["ts"]
+        try:
+            self.controller.record_signal({
+                "ts": c4["ts"], "due": c4["bar_t"] + (HORIZONS["4h"][2] + 1) * 900, "symbol": sym, "price": price,
+                "p_up_4h": p_up, "entry_ok": entry_ok, "eligible": eligible,
+                "extra_risk": extra_risk, "reasons": reasons, "model": c4.get("model", ""),
+                "samples": int(c4["paths"].shape[0]),
+            })
+        except Exception:
+            log.exception("signal register failed")
 
     async def run(self) -> None:
         while True:
             try:
                 await asyncio.to_thread(self._refresh_library15)
+                self.btc = self.btc_trend()
                 rows = []
                 for sym in self.predictor.active_symbols():  # mini: top 12, base: all
                     if sym in self.excluded:
@@ -249,7 +288,7 @@ class Checker:
                                   "kronos_p_tp", "kronos_p_sl", "kronos_p_liq", "ev", "combined_prob",
                                   "extra_risk", "score", "eligible", "reasons", "source", "max_leverage",
                                   "p_up_4h", "conf_4h", "range_pos", "in_zone", "horizons", "best_h",
-                                  "drops", "drop_priority", "drop_window", "p_up_8h", "dip_price", "dip_minutes",
+                                  "drops", "drop_priority", "drop_window", "dip_price", "dip_minutes",
                                   "entry_ok")} | {
             "rsi": ind["rsi"], "regime": ind["regime"], "flags": ind["flags"], "ind_score": ind["score"],
             "analog_win": r["analog_dir"], "analog_n": r["analogs"].get("n", 0),

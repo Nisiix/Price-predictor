@@ -216,14 +216,13 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
         <div className="scroll" style={{ maxHeight: 380, overflowY: "auto" }}>
           <table className="t">
             <thead>
-              <tr><th>Token</th><th>Kronos 4 ore</th><th>8 ore</th><th>Ingresso previsto</th><th>Leva</th>{withPattern && <th className="n">Pattern</th>}<th className="n">Rischio</th><th className="n">Punteggio</th><th>Range 4 ore</th><th>Esito</th></tr>
+              <tr><th>Token</th><th>Kronos 4 ore</th><th>Ingresso previsto</th><th>Leva</th>{withPattern && <th className="n">Pattern</th>}<th className="n">Rischio</th><th className="n">Punteggio</th><th>Range 4 ore</th><th>Esito</th></tr>
             </thead>
             <tbody>
               {ranking.map((r) => (
                 <tr key={r.symbol} className={`clickable ${focus === r.symbol ? "cur" : ""}`} onClick={() => onFocus(r.symbol)}>
                   <td><b>{r.base}</b>{r.drop_priority > 0 && <span className="droptag" title="Calo recente oltre il 5%: precedenza in apertura">↓{(r.drop_priority * 100).toFixed(1)}% {r.drop_window}</span>}</td>
                   <td className={r.side}>{r.side === "long" ? "▲ rialzo" : "▼ ribasso"} {pct(r.conf_4h)}</td>
-                  <td className={r.p_up_8h >= 0.5 ? "long" : "short"}>{r.p_up_8h >= 0.5 ? "▲" : "▼"} {pct(Math.max(r.p_up_8h, 1 - r.p_up_8h))}</td>
                   <td title={`Punto più basso previsto da Kronos nelle prossime 4 ore, tra circa ${r.dip_minutes} min`}>
                     {price(r.dip_price)} {r.entry_ok ? <span className="long">· raggiunto</span> : <span className="faint">· {signed((r.dip_price / r.price - 1) * 100, 2)}%</span>}
                   </td>
@@ -240,7 +239,7 @@ export function CheckerTable({ ranking, focus, onFocus, paused, pauseReason }: {
         </div>
       )}
       <p className="note" style={{ marginTop: 8 }}>
-        I token con una posizione aperta non vengono analizzati finché la posizione resta aperta. L'Executor apre solo long, quando la probabilità di rialzo a 4 ore supera il 70% e il trend a 8 ore è al rialzo (il rischio decide la leva) e il prezzo arriva al punto più basso previsto da Kronos; prima di entrare ricalcola la previsione e rinvia se ne vede un ribasso ulteriore; i token con un calo oltre il 5% in 4, 8 o 12 ore hanno la precedenza:
+        I token con una posizione aperta non vengono analizzati finché la posizione resta aperta. L'Executor apre solo long, quando la probabilità di rialzo a 4 ore supera il 70%, BTC non è in calo a 4 e 24 ore (il rischio decide la leva, con al massimo il 50% del capitale esposto per token e il 150% in totale) e il prezzo arriva al punto d'ingresso previsto da Kronos (la mediana dei minimi dei percorsi); prima di entrare ricalcola la previsione con 96 campioni ed entra solo su quella, rinviando se ne vede un ribasso ulteriore; i token con un calo oltre il 5% in 4, 8 o 12 ore hanno la precedenza:
         vicino al minimo delle ultime 4 ore per un long, vicino al massimo per uno short. Seleziona una riga per l'analisi completa.
       </p>
     </div>
@@ -349,7 +348,7 @@ export function Positions({ ex, onToast, realClose }: { ex: ExecutorView | null;
         <div><span>Posizioni</span><b>{ex.max_positions ? `${ex.positions.length} / ${ex.max_positions}` : ex.positions.length}</b></div>
         <div title={(ex.risk_tiers ?? []).map(([r, s]) => `rischio ≤${Math.round(r * 100)}%: ${Math.round(s * 100)}%`).join(" · ") + ` · oltre: ${Math.round((ex.risk_tier_above ?? 0) * 100)}%`}><span>Per operazione</span><b>3–10% del capitale secondo il rischio</b></div>
         <div title="L'importo di ogni apertura è calcolato perché la liquidazione di tutte le posizioni resti almeno a questa distanza dall'entrata"><span>Limite long</span><b>liquidazione a ≥{Math.round(ex.liq_min_distance * 100)}% dall'entrata</b></div>
-        <div><span>Chiusura</span><b style={{ fontSize: 14 }}>{ex.use_tp ? `TP +${ex.tp_pct}% · ` : "inversione 4 ore · "}{ex.use_initial_stop ? `SL −${ex.sl_pct}%` : ex.hold_losers ? "le posizioni in perdita non vengono mai chiuse" : `niente stop in perdita, dopo ${ex.recovery_hours} h esce se il recupero è sotto il ${Math.round(ex.recovery_min_prob * 100)}%`} · da +{ex.lock_trigger_pct}% protegge +{ex.lock_profit_pct}% (con leva)</b></div>
+        <div><span>Chiusura</span><b style={{ fontSize: 14 }}>{ex.use_tp ? `TP +${ex.tp_pct}% · ` : "inversione 4 ore · "}{ex.use_initial_stop ? `SL −${ex.sl_pct}%` : ex.hold_losers ? "le posizioni in perdita non vengono mai chiuse" : `niente stop in perdita, dopo ${ex.recovery_hours} h esce se il recupero è sotto il ${Math.round(ex.recovery_min_prob * 100)}%`} · stop di protezione a +{ex.lock_profit_pct}% netto sul margine, attivo {ex.lock_atr_mult} ATR sopra</b></div>
         <label className="switch" style={{ marginLeft: "auto" }}>
           <input type="checkbox" checked={ex.auto} onChange={toggleAuto} /> Apertura automatica
         </label>
@@ -377,7 +376,7 @@ export function Positions({ ex, onToast, realClose }: { ex: ExecutorView | null;
                         <div className="z" style={{ left: `${zero}%` }} />
                         <div className="m" style={{ left: `${Math.min(zero, at)}%`, width: `${Math.abs(at - zero)}%`, background: p.lev_move >= 0 ? "var(--long)" : "var(--short)" }} />
                       </div>
-                      <span className="faint" style={{ fontSize: 11 }}>{signed(p.lev_move, 2)}% leva · {p.locked ? <><span className="long">SL protetto +{ex.lock_profit_pct}%</span> {price(p.sl)}</> : p.sl > 0 ? <>SL {price(p.sl)}</> : p.recovery_prob != null ? <span style={{ color: p.recovery_prob >= ex.recovery_min_prob ? "var(--long)" : "var(--warn)" }}>recupero {pct(p.recovery_prob)}</span> : "nessuno stop"} · liq {price(p.liq)}</span>
+                      <span className="faint" style={{ fontSize: 11 }}>{signed(p.lev_move, 2)}% leva · {p.locked ? <><span className="long">SL protetto +{ex.lock_profit_pct}% netto</span> {price(p.sl)}</> : p.sl > 0 ? <>SL {price(p.sl)}</> : p.recovery_prob != null ? <span style={{ color: p.recovery_prob >= ex.recovery_min_prob ? "var(--long)" : "var(--warn)" }}>recupero {pct(p.recovery_prob)}</span> : "nessuno stop"} · liq {price(p.liq)}</span>
                     </td>
                     <td style={{ fontSize: 12 }}>
                       {p.p_dir_now != null ? (

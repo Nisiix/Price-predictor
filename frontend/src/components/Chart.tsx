@@ -71,12 +71,13 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
     const shown = bars.slice(Math.max(0, end - visible), end);
     const live = offset === 0;
     const lastT = shown.length ? shown[shown.length - 1][0] : 0;
-    // where a forecast step sits, by its timestamp: slot of the candle opening at time t
+    // where a time sits on the candle axis: slot of the candle opening at time t (fractional inside a candle)
     const slotOfT = (t: number) => shown.length - 1 + (t - lastT) / tfSeconds;
     const fanOn = live && fan && fan.t.length > 0 && shown.length > 0;
     const futN = fanOn ? fan!.q50.length : 0;
-    // free slots needed on the right: from the current candle to the last forecast step
-    const futSlots = fanOn ? Math.max(0, Math.ceil(slotOfT(fan!.t[futN - 1]) - (shown.length - 1))) : 0;
+    const fanTf = fan?.tf_seconds ?? tfSeconds;
+    // free slots needed on the right: from the current candle to the close of the last forecast step
+    const futSlots = fanOn ? Math.max(0, Math.ceil(slotOfT(fan!.t[futN - 1] + fanTf) - 0.5 - (shown.length - 1))) : 0;
     // slots are fixed by the zoom level, not by how many candles exist
     const slots = Math.max(visible, shown.length) + futSlots + 1;
     const plotW = w - PAD.l - PAD.r;
@@ -95,10 +96,12 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
     const x = (i: number) => PAD.l + (firstSlot + i + 0.5) * step;
     const yInv = (py: number) => lo + (1 - (py - PAD.t) / (H - PAD.t - PAD.b)) * (hi - lo);
     const slotAt = (px: number) => Math.round((px - PAD.l) / step - firstSlot - 0.5); // candle index (>= shown.length: future)
-    return { shown, futN, futSlots, step, lo, hi, y, x, live, yInv, slotAt, slotOfT };
+    // x of a moment in time: a candle spans its slot from open to close
+    const xT = (t: number) => x(slotOfT(t) - 0.5);
+    return { shown, futN, futSlots, step, lo, hi, y, x, xT, fanTf, live, yInv, slotAt, slotOfT };
   }, [bars, fan, levels, w, visible, offset, maxOffset, tfSeconds]);
 
-  const { shown, futN, futSlots, step, lo, hi, y, x, live, yInv, slotAt, slotOfT } = view;
+  const { shown, futN, futSlots, step, lo, hi, y, x, xT, fanTf, live, yInv, slotAt } = view;
   const [hover, setHover] = useState<{ px: number; py: number } | null>(null);
   const last = shown.length ? shown[shown.length - 1] : null;
   const nowX = shown.length ? x(shown.length - 1) : PAD.l;
@@ -106,11 +109,12 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
 
   let cone: ReactElement | null = null;
   if (fan && last && futN) {
-    // Each forecast step is drawn at its own time (the close of the candle it predicts). The cone starts at the
-    // close of the last candle Kronos saw, at the price it forecast from: if the forecast is a few candles old,
-    // the cone starts a few candles back and you see how the price actually moved against it.
-    const originT = fan.t[0] - tfSeconds;
-    const xs = [x(slotOfT(originT) + 0.5), ...fan.t.map((t) => x(slotOfT(t) + 0.5))];
+    // Each forecast step (15 minutes) is drawn at its own time, the close of the candle it predicts, on candles of
+    // any timeframe. The cone starts where and when the forecast was made: at the live price of that moment (the
+    // paths are re-anchored on it), so on a fresh forecast it starts on the current candle at the current price;
+    // on an older one it starts back in time and you see how the price moved against it.
+    const originT = fan.ts ?? fan.t[0];
+    const xs = [xT(originT), ...fan.t.map((t) => xT(t + fanTf))];
     const band = (a: number[], b: number[]) => {
       const top = [fan.anchor, ...b].map((v, i) => `${xs[i]},${y(v)}`);
       const bot = [fan.anchor, ...a].map((v, i) => `${xs[i]},${y(v)}`).reverse();
@@ -180,7 +184,8 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
       );
     } else if (fan && i >= shown.length && last && futN) {
       t = last[0] + (i - (shown.length - 1)) * tfSeconds;
-      const k = Math.round((t - fan.t[0]) / tfSeconds);
+      // forecast step whose close is nearest to the close of the hovered candle
+      const k = Math.round((t + tfSeconds - (fan.t[0] + fanTf)) / fanTf);
       if (k < 0 || k >= futN) t = null;
       if (t != null) info = (
         <div className="ohlc kronos">
@@ -262,7 +267,7 @@ export function Chart({ bars, fan, levels, tfSeconds, resetKey, markStep, markLa
         )}
         {timeTicks.map((i) => <text key={i} x={x(i) - 14} y={H - 6}>{fmtTime(shown[i][0])}</text>)}
         {fan && futN > 0 && last && (
-          <text x={x(slotOfT(fan.t[futN - 1]) + 0.5) - 30} y={H - 6} style={{ fill: "var(--kronos)" }}>fino alle {fmtTime(fan.t[futN - 1] + tfSeconds)}</text>
+          <text x={xT(fan.t[futN - 1] + fanTf) - 30} y={H - 6} style={{ fill: "var(--kronos)" }}>fino alle {fmtTime(fan.t[futN - 1] + fanTf)}</text>
         )}
         {crosshair}
         {shown.length < 3 && (

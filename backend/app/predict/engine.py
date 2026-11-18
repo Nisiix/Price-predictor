@@ -29,6 +29,7 @@ class SeriesInput:
     ohlc: np.ndarray  # shape (T, 4): open, high, low, close
     timestamps: pd.DatetimeIndex  # len T
     future_timestamps: pd.DatetimeIndex  # len pred_len
+    volume: np.ndarray | None = None  # len T; None = no volume (Kronos then reads volume and amount as 0)
 
 
 class KronosEngine:
@@ -99,6 +100,11 @@ class KronosEngine:
         for i, s in enumerate(series):
             x = np.zeros((len(s.ohlc), 6), dtype=np.float32)  # o,h,l,c,volume,amount
             x[:, :PRICE_COLS] = s.ohlc
+            if s.volume is not None and len(s.volume) == len(s.ohlc):
+                # volume and amount, as Kronos was trained on: amount = volume x average price of the candle
+                # (the same rule as the original KronosPredictor when only the volume is known)
+                x[:, 4] = s.volume
+                x[:, 5] = s.volume * s.ohlc.mean(axis=1)
             mean = x.mean(axis=0)
             std = x.std(axis=0)
             if std[3] <= 1e-9 * max(abs(mean[3]), 1e-12):

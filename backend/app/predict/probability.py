@@ -30,12 +30,15 @@ def horizon_stats(paths: np.ndarray, last: float, step: int) -> dict:
     }
 
 
-def predicted_dip(paths: np.ndarray, steps: int) -> tuple[float, int]:
-    """Lowest point of the median predicted path within `steps` bars: (price, step index 0-based).
-    It is where Kronos expects the price to bottom before the forecast horizon."""
-    med_low = np.median(paths[:, :steps, 2], axis=0)  # median of the sampled lows, bar by bar
-    i = int(np.argmin(med_low))
-    return float(med_low[i]), i
+def predicted_dip(paths: np.ndarray, steps: int, quantile: float = 0.5) -> tuple[float, int]:
+    """Entry point from the lowest price of EACH sampled path within `steps` bars: (price, step index 0-based).
+    Every path has its own low; the entry is the `quantile` of those lows (0.5: half the paths go at least that
+    low before the horizon) and the step is the median bar where the paths bottom. The minimum of the median path,
+    used before, sat only a bar's typical range below the price and was not a predicted low."""
+    lows = paths[:, :steps, 2]
+    path_low = lows.min(axis=1)
+    path_at = lows.argmin(axis=1)
+    return float(np.quantile(path_low, quantile)), int(np.median(path_at))
 
 
 def fan(paths: np.ndarray) -> dict:

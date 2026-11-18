@@ -126,13 +126,13 @@ def test_take_profit_at_plus_5_leveraged(monkeypatch):
     monkeypatch.setattr(settings, "use_take_profit", True)
     feed, ctl, ex = make()
     p = open_long(ex)
-    assert p.margin == settings.margin_usdc and p.notional == settings.margin_usdc * 10
+    assert p.notional == pytest.approx(500.0)  # 10% of 1000 at 10x would be 1000: capped at 50% of the capital
     assert step(ex, feed, p.entry * 1.004) is None  # +4% leveraged: keep open
     r = step(ex, feed, p.entry * 1.0051)
     assert r.startswith("take profit")
     t = ctl.trades[-1]
     assert t.lev_move == pytest.approx(5.0 - settings.slippage * 10 * 100, abs=0.01)  # TP triggers a market close: exit slippage
-    assert t.pnl < settings.margin_usdc * 0.05  # fees are paid
+    assert t.pnl < t.margin * 0.05  # fees are paid
 
 
 def test_stop_loss_at_minus_2_leveraged(monkeypatch):
@@ -223,16 +223,19 @@ def test_no_take_profit_by_default_and_reversal_exit():
     assert r and r.startswith("inversione")
 
 
-def test_profit_lock_moves_stop_to_plus_2_after_plus_5():
+@pytest.mark.parametrize("lev", [10, 15, 20])
+def test_protective_stop_closes_at_plus_2_net(lev):
     feed, ctl, ex = make()
-    p = open_long(ex, lev=10)
-    sl0 = p.sl
-    assert step(ex, feed, p.entry * 1.0051) is None  # +5.1% leveraged: lock, no exit
-    assert p.locked and p.sl > sl0
-    assert p.sl == pytest.approx(p.entry * 1.002)  # +2% leveraged at 10x = +0.2% price
-    r = step(ex, feed, p.entry * 1.0019)  # back below the lock level
+    p = open_long(ex, lev=lev)
+    level, trigger = ex.lock_levels(p)
+    assert trigger == pytest.approx(level * 1.002)  # no 15m candles in the test: 0.2% minimum distance
+    assert step(ex, feed, trigger * 0.9999) is None and not p.locked  # not armed yet
+    assert step(ex, feed, trigger * 1.0001) is None and p.locked  # armed, stop at the +2% net level
+    assert p.sl == pytest.approx(level)
+    r = step(ex, feed, level * (1 - 1e-12))  # back to the stop (no gap through it)
     assert r.startswith("stop di protezione")
-    assert ctl.trades[-1].lev_move > 0  # closed in profit (gross)
+    t = ctl.trades[-1]
+    assert t.roe == pytest.approx(2.0, abs=0.01)  # +2% of the margin after fees and slippage, at any leverage
 
 
 def test_no_loss_stop_by_default_recovery_check_after_hours(monkeypatch):
@@ -259,7 +262,7 @@ def test_no_loss_stop_by_default_recovery_check_after_hours(monkeypatch):
 def test_sizing_keeps_every_liquidation_half_the_entry_away():
     feed, ctl, ex = make()
     p1 = open_long(ex, lev=20)
-    assert p1.margin < 0.10 * 1000  # 10% (risk 20%) at 20x would put liquidation too close on 1000 USDC
+    assert p1.margin == pytest.approx(25.0)  # 10% (risk 20%) at 20x = 200% exposure: capped at 50% of the capital
     # second position on another market
     feed.markets["PERP_ETH_USDC"] = Market("PERP_ETH_USDC", "ETH", "Ethereum", 2, 20, 0.05, 0.025, 0.01, 0.01, 0.001, 10,
                                            mark_price=2000.0)
@@ -268,7 +271,7 @@ def test_sizing_keeps_every_liquidation_half_the_entry_away():
     asyncio.run(ex.open_from_signal(sig))
     ps = ex.open_positions()
     short = [q for q in ps if q.side < 0][0]
-    assert short.margin == pytest.approx(0.07 * 1000, rel=0.02)  # risk 30% -> 7% of capital, no liquidation sizing
+    assert short.margin == pytest.approx(25.0, rel=0.02)  # risk 30% -> 7% of capital, but at 20x the token cap binds
     for q in ps:
         q.liq = ex.cross_liq(q)
     assert p1.liq <= p1.entry * 0.5 * 1.05  # the long stays far from liquidation (within the short's extra load)
@@ -338,8 +341,8 @@ def test_risk_tiers_share_of_capital():
     assert E.risk_share(0.28) == 0.07 and E.risk_share(0.33) == 0.05
     assert E.risk_share(0.40) == 0.03 and E.risk_share(0.55) == 0.0  # above 40%: no opening
     feed, ctl, ex = make()
-    p = open_long(ex, lev=10)  # risk 0.2 -> 10% of 1000 = 100 USDC, fits the liquidation rule at 10x
-    assert p.margin == pytest.approx(100.0, rel=0.01)
+    p = open_long(ex, lev=10)  # risk 0.2 -> 10% of 1000 = 100 USDC, but 1000 notional is above the 50% token cap
+    assert p.margin == pytest.approx(50.0, rel=0.01)
 
 
 def test_simulated_account_survives_a_restart(tmp_path):
@@ -386,3 +389,136 @@ def test_horizon_index_moves_along_an_older_forecast():
     assert horizon_index(bar_t, 60, 15, 30, bar_t + 60 + 6 * 60 + 5) == 20
     # the forecast does not reach 15 minutes from now any more
     assert horizon_index(bar_t, 60, 15, 30, bar_t + 60 + 16 * 60) is None
+
+
+# ------------------------------------------------------------------ review fixes (A, B, C, E, G, H, I, 13, 15)
+def _service_with_history(n_bars=200):
+    from app.config import TIMEFRAMES
+    from app.market.candles import CandleStore
+    from app.predict.service import PredictionService
+
+    class M:
+        rank, mmr, max_leverage, symbol = 1, 0.05, 20, "PERP_X_USDC"
+
+    class Feed:
+        def __init__(self):
+            self.store = CandleStore(TIMEFRAMES)
+            self.markets = {"PERP_X_USDC": M()}
+            now = int(time.time() // 900 * 900)
+            self.store.set_history("PERP_X_USDC", "15m", [
+                [now - 900 * (n_bars - i), 1 + i * 1e-3, 1.01 + i * 1e-3, 0.99 + i * 1e-3, 1 + i * 1e-3, 5.0] for i in range(n_bars)])
+
+        async def refresh_recent(self, *a, **k):
+            return None
+
+    return PredictionService(Feed())
+
+
+def test_decision_forecast_is_kept_and_used_without_a_decision_model():
+    svc = _service_with_history()
+    assert svc.decider is None  # default configuration: the main model decides
+    old = svc._run_tf("PERP_X_USDC", "15m")
+    svc.cache[("PERP_X_USDC", "15m")] = old
+    fresh = svc.run_decision("PERP_X_USDC")
+    assert fresh is not None and fresh["samples"] == settings.decision_samples
+    assert svc.decision_cache("PERP_X_USDC") is fresh  # before the fix the old forecast was used
+    assert svc.cache[("PERP_X_USDC", "15m")] is fresh
+
+
+def test_calibration_scores_the_step_it_read():
+    from app.predict.service import Calibration
+
+    cal = Calibration()
+    bar_t = 1_000_000.0
+    paths = np.full((24, 32, 4), 100.0)
+    cal.register({"tf": "15m", "ts": bar_t + 900 + 60, "bar_t": bar_t, "symbol": "X", "last": 100.0, "paths": paths})
+    due = {label: d for d, label, *_ in cal.pending}
+    assert due["4h"] == bar_t + 17 * 900  # close of path index 15 (step 16)
+    assert due["15m"] == bar_t + 2 * 900
+
+
+def test_volumes_fill_tick_built_candles():
+    from app.predict.service import _volumes
+
+    v = _volumes(np.array([10.0, 20.0, 30.0, 0.0]))
+    assert v[-1] == pytest.approx(20.0) and v[0] == 10.0
+
+
+def test_entry_point_from_each_paths_low():
+    from app.predict.probability import predicted_dip
+
+    paths = np.full((4, 6, 4), 100.0)
+    for k, (low, at) in enumerate([(97.0, 1), (98.0, 3), (99.0, 2), (96.0, 4)]):
+        paths[k, at, 2] = low
+    price, i = predicted_dip(paths, 6)
+    assert price == pytest.approx(97.5)  # median of the four path lows (the median path low would be 100)
+    assert i == 2
+
+
+def test_total_exposure_cap(monkeypatch):
+    monkeypatch.setattr(settings, "max_token_exposure", 1.0)
+    monkeypatch.setattr(settings, "max_total_exposure", 0.6)
+    monkeypatch.setattr(settings, "liq_min_distance", 0.01)
+    feed, ctl, ex = make()
+    p = open_long(ex, lev=10)  # 100 USDC margin at 10x = 1000 notional, total cap 600
+    assert p.notional == pytest.approx(600.0, rel=0.01)
+    room, why = ex.exposure_room("PERP_ETH_USDC")
+    assert room == pytest.approx(0.0, abs=1.0) and "totale" in why
+
+
+def test_btc_filter_blocks_longs_while_btc_falls(monkeypatch):
+    from app.agents.checker import Checker
+    from app.config import TIMEFRAMES
+    from app.market.candles import CandleStore
+
+    ch = Checker.__new__(Checker)
+
+    class Feed:
+        store = CandleStore(TIMEFRAMES)
+
+    ch.feed = Feed()
+    now = int(time.time() // 900 * 900)
+    closes = np.linspace(110, 100, 100)  # falling over the last day
+    ch.feed.store.set_history("PERP_BTC_USDC", "15m", [[now - 900 * (100 - i), c, c, c, c, 1.0] for i, c in enumerate(closes)])
+    ch.feed.store.update_tick("PERP_BTC_USDC", 100.0, time.time())
+    t = ch.btc_trend()
+    assert not t["ok"] and t["chg_4h"] < 0 and t["chg_24h"] < 0
+    monkeypatch.setattr(settings, "btc_filter_4h", 0.05)
+    monkeypatch.setattr(settings, "btc_filter_24h", 0.10)
+    assert ch.btc_trend()["ok"]  # a looser threshold lets small falls through
+
+
+def test_reversal_reads_four_hours_from_now_against_the_live_price():
+    feed, ctl, ex = make(price=100.0)
+    p = open_long(ex)
+
+    class Pred:
+        cache = {}
+
+        def decision_cache(self, sym):
+            return self.cache.get((sym, "15m"))
+
+    ex.predictor = Pred()
+    bar_t = time.time() // 900 * 900 - 900 * 3  # forecast two bars old
+    paths = np.full((24, 32, 4), 104.0)
+    paths[:, 17, 3] = 99.0  # 4 hours from NOW on this older forecast (index 15 + 2 elapsed bars): below the price
+    Pred.cache[("PERP_SOL_USDC", "15m")] = {"ts": p.opened_ts + 1, "last": 100.0, "paths": paths, "bar_t": bar_t}
+    ex._reversal(p)
+    assert p.p_dir_now == 0.0  # index 15 (104) would have said 100%
+
+
+def test_signal_register_and_stats(tmp_path, monkeypatch):
+    from app.agents.controller import Controller
+
+    monkeypatch.setattr(settings, "db_path", tmp_path / "t.sqlite3")
+    ctl = Controller(FakeBus())
+    for i, (p_up, ok) in enumerate([(0.72, True), (0.78, True), (0.55, False)]):
+        ctl.record_signal({"ts": 1.0 + i, "due": 2.0, "symbol": f"S{i}", "price": 100.0, "p_up_4h": p_up, "p_up_8h": 0.6,
+                           "entry_ok": ok, "eligible": ok, "extra_risk": 0.3, "reasons": []})
+    ctl.record_signal({"ts": 1.0, "due": 2.0, "symbol": "S0", "price": 100.0, "p_up_4h": 0.72, "p_up_8h": 0.6,
+                       "entry_ok": True, "eligible": True})  # same forecast logged twice: ignored
+    assert ctl.resolve_signals(lambda s: 101.0) == 3
+    st = ctl.signal_stats()
+    assert {g["key"] for g in st["eligible"]} == {"70-75%", "75-80%"}
+    assert st["all"][0]["win"] == 1.0 and st["pending"] == 0
+    assert "Registro segnali" in ctl.markdown()
